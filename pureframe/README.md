@@ -25,10 +25,11 @@ site/                   the website source (what GitHub Pages serves, after the 
   js/config.js          Gumroad link, price, free limit, analytics. Edit before launch
   css/styles.css
   og.png                social preview image
-scripts/build.mjs       builds dist/site (+ one guide page per preset, sitemap, robots)
+scripts/build.mjs       builds dist/site (guide page per preset, cheat sheet, articles, sitemap, robots)
                         and dist/PureFrame-Pro.zip
-test/                   node:test unit tests
-marketing/              Gumroad cover, thumbnail and screenshots
+content/                how-to articles (HTML fragments with a <!--meta {...} --> header)
+test/                   node:test unit tests, including a build + link check
+marketing/              Gumroad cover, thumbnail, screenshots and launch-posts.md
 ```
 
 ## How the fix works

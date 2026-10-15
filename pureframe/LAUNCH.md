@@ -88,9 +88,16 @@ GitHub Pages on a private repo needs a paid GitHub plan.
 
 ## 5. Get the first visitors (one-time pushes that compound)
 
-The 7 guide pages under `/guides/` target high-intent searches ("Walmart
-image requirements", "Etsy photo size"...). SEO takes 2–6 months to build. To
-get sales sooner:
+The guide pages under `/guides/` target high-intent searches:
+
+- 7 marketplace requirement pages ("Walmart image requirements", "Etsy photo
+  size"...)
+- a cross-marketplace cheat sheet that other sites can link to
+- how-to articles on pure white backgrounds and rejected Amazon images
+
+SEO takes 2–6 months to build. Ready-to-paste posts for Product Hunt, Hacker
+News, Reddit, short videos and Pinterest are in
+[`marketing/launch-posts.md`](marketing/launch-posts.md). To get sales sooner:
 
 - **Show, don't tell.** Record 15-second before/after screen captures ("Amazon
   rejected my main image → fixed in one click") for TikTok, YouTube Shorts,

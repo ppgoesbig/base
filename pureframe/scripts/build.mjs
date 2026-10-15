@@ -11,7 +11,7 @@ import { fileURLToPath } from 'node:url';
 const require = createRequire(import.meta.url);
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const SITE = path.join(ROOT, 'site');
-const DIST = path.join(ROOT, 'dist');
+const DIST = process.env.PF_DIST ? path.resolve(process.env.PF_DIST) : path.join(ROOT, 'dist');
 const SITE_URL = (process.env.SITE_URL || 'https://ppgoesbig.github.io/base').replace(/\/+$/, '');
 const R = require(path.join(SITE, 'js/rules.js'));
 const Z = require(path.join(SITE, 'js/zip.js'));
@@ -82,10 +82,10 @@ const header = (prefix) => `<header class="site-header"><div class="wrap header-
   <nav class="nav" aria-label="Main"><a href="${prefix}./#tool">Check photos</a><a href="${prefix}guides/">Requirements</a><a href="${prefix}./#pricing">Pricing</a><a class="btn btn-small btn-primary" href="${prefix}./#pricing">Get Pro</a></nav>
 </div></header>`;
 const footer = `<footer class="site-footer"><div class="wrap footer-row"><p>© ${YEAR} PureFrame. Photos are processed on your device and never uploaded.</p>
-  <nav class="footer-links" aria-label="Requirements guides">${R.PRESETS.map((p) => `<a href="${p.id}-image-requirements.html">${esc(p.name)}</a>`).join('')}</nav></div></footer>`;
+  <nav class="footer-links" aria-label="Requirements guides">${R.PRESETS.map((p) => `<a href="${p.id}-image-requirements.html">${esc(p.name)}</a>`).join('')}<a href="image-size-cheat-sheet.html">Cheat sheet</a></nav></div></footer>`;
 const icon = '<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=\'http://www.w3.org/2000/svg\' viewBox=\'0 0 32 32\'%3E%3Crect x=\'3\' y=\'3\' width=\'26\' height=\'26\' rx=\'6\' fill=\'%23111827\'/%3E%3Crect x=\'9\' y=\'9\' width=\'14\' height=\'14\' rx=\'2\' fill=\'%23fff\'/%3E%3C/svg%3E">';
 
-function page({ title, description, canonical, body, jsonld }) {
+function page({ title, description, canonical, body, jsonld, wide }) {
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -106,7 +106,7 @@ function page({ title, description, canonical, body, jsonld }) {
 </head>
 <body>
 ${header('../')}
-<main class="wrap guide">
+<main class="wrap guide${wide ? ' guide-wide' : ''}">
 ${body}
 </main>
 ${footer}
@@ -160,6 +160,43 @@ ${rej.map(([h, t]) => `<h3>${esc(h)}</h3><p>${esc(t)}</p>`).join('\n')}
   }));
 }
 
+// How-to articles: pureframe/content/*.html, metadata in a leading <!--meta {...} --> comment.
+const CONTENT = path.join(ROOT, 'content');
+const articles = fs.readdirSync(CONTENT).filter((f) => f.endsWith('.html')).sort().map((f) => {
+  const src = fs.readFileSync(path.join(CONTENT, f), 'utf8');
+  const m = src.match(/^<!--meta (\{[\s\S]*?\}) -->\n/);
+  if (!m) throw new Error(`${f}: missing <!--meta {...} --> header`);
+  return { ...JSON.parse(m[1]), body: src.slice(m[0].length) };
+});
+for (const a of articles) {
+  const url = `${SITE_URL}/guides/${a.slug}.html`;
+  write(path.join(OUT, 'guides', `${a.slug}.html`), page({
+    title: a.title, description: a.description, canonical: url,
+    body: `<p class="muted"><a href="./">Guides</a> › ${esc(a.h1)}</p>\n<h1>${esc(a.h1)}</h1>\n<p class="updated">Last reviewed ${REVIEWED}.</p>\n${a.body}`,
+    jsonld: { '@context': 'https://schema.org', '@type': 'Article', headline: a.h1, description: a.description, dateModified: new Date().toISOString().slice(0, 10), mainEntityOfPage: url },
+  }));
+}
+
+// One table with every marketplace: the page people bookmark and link to.
+const cheatCols = ['Background', 'Product fill', 'Minimum size', 'Recommended size', 'Shape', 'File types', 'Max file size'];
+const cheatRows = R.PRESETS.map((p) => {
+  const r = Object.fromEntries(specRows(p));
+  return `<tr><th scope="row"><a href="${p.id}-image-requirements.html">${esc(p.name)}</a></th>${cheatCols.map((c) => `<td>${esc(r[c])}</td>`).join('')}</tr>`;
+}).join('');
+write(path.join(OUT, 'guides', 'image-size-cheat-sheet.html'), page({
+  title: `Product Image Size Cheat Sheet ${YEAR}: Amazon, Walmart, Etsy, eBay & More | PureFrame`,
+  description: `Every marketplace's product image rules in one table: background, frame fill, minimum and recommended size, shape, file types and file size for Amazon, Walmart, TikTok Shop, eBay, Etsy, Shopify and Google Shopping (${YEAR}).`,
+  canonical: `${SITE_URL}/guides/image-size-cheat-sheet.html`,
+  wide: true,
+  body: `<p class="muted"><a href="./">Guides</a> › Cheat sheet</p>
+<h1>Product image size cheat sheet (${YEAR})</h1>
+<p class="updated">Last reviewed ${REVIEWED}. Each marketplace links to its full guide and official sources.</p>
+<p>The main-image rules for every major marketplace, side by side. Selling on several? Shoot at 2,200 px or more on a white backdrop with the product filling about 88% of the frame, and you can export for all of them from one original.</p>
+<div class="table-scroll"><table class="wide"><thead><tr><th scope="col">Marketplace</th>${cheatCols.map((c) => `<th scope="col">${esc(c)}</th>`).join('')}</tr></thead><tbody>${cheatRows}</tbody></table></div>
+<div class="cta"><p>Check a photo against any of these in seconds, free.</p><a class="btn btn-primary" href="../#tool">Check my photos</a></div>
+<p class="hint">Feel free to link to or share this table. Marketplaces update their rules from time to time; the official page always wins.</p>`,
+}));
+
 write(path.join(OUT, 'guides', 'index.html'), page({
   title: `Marketplace Product Image Requirements ${YEAR} | PureFrame`,
   description: 'Product photo requirements for Amazon, Walmart, TikTok Shop, eBay, Etsy, Shopify and Google Shopping in one place, with a free checker.',
@@ -168,10 +205,12 @@ write(path.join(OUT, 'guides', 'index.html'), page({
 <p class="updated">Last reviewed ${REVIEWED}.</p>
 <p>Background, size, shape and file rules for the main product image on each major marketplace, with links to the official pages.</p>
 <ul class="guide-list">${R.PRESETS.map((p) => `<li><a href="${p.id}-image-requirements.html"><strong>${esc(p.name)}</strong><span>${esc(specRows(p)[0][1])}</span></a></li>`).join('')}</ul>
+<h2>How-to guides</h2>
+<ul class="guide-list"><li><a href="image-size-cheat-sheet.html"><strong>Image size cheat sheet</strong><span>Every marketplace's rules in one table.</span></a></li>${articles.map((a) => `<li><a href="${a.slug}.html"><strong>${esc(a.h1)}</strong><span>${esc(a.card)}</span></a></li>`).join('')}</ul>
 <div class="cta"><p>Check your photos against any of these, free.</p><a class="btn btn-primary" href="../#tool">Check my photos</a></div>`,
 }));
 
-const pages = ['/', '/guides/', ...R.PRESETS.map((p) => `/guides/${p.id}-image-requirements.html`)];
+const pages = ['/', '/guides/', ...R.PRESETS.map((p) => `/guides/${p.id}-image-requirements.html`), '/guides/image-size-cheat-sheet.html', ...articles.map((a) => `/guides/${a.slug}.html`)];
 const today = new Date().toISOString().slice(0, 10);
 write(path.join(OUT, 'sitemap.xml'), `<?xml version="1.0" encoding="UTF-8"?>
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
@@ -182,7 +221,8 @@ write(path.join(OUT, 'robots.txt'), `User-agent: *\nAllow: /\n\nSitemap: ${SITE_
 write(path.join(OUT, '404.html'), page({
   title: 'Page not found | PureFrame', description: 'Page not found.', canonical: `${SITE_URL}/`,
   body: '<h1>Page not found</h1><p><a href="../">Go to the PureFrame photo checker</a></p>',
-}).replace('../css/styles.css', `${SITE_URL}/css/styles.css`).replaceAll('href="../', `href="${SITE_URL}/`));
+}).replace('../css/styles.css', `${SITE_URL}/css/styles.css`).replaceAll('href="../', `href="${SITE_URL}/`)
+  .replace(/href="([a-z0-9-]+\.html)"/g, `href="${SITE_URL}/guides/$1"`));
 
 // ---------- Pro: one offline HTML file ----------
 let pro = stripFree(read('index.html'));

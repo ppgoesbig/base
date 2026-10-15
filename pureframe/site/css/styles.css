@@ -232,11 +232,16 @@ section h2 { font-size: clamp(1.5rem, 3vw, 2rem); }
 
 /* Guide pages */
 .guide { max-width: 760px; padding-top: 32px; padding-bottom: 24px; }
+.guide-wide { max-width: 1080px; }
 .guide h1 { font-size: clamp(1.8rem, 4vw, 2.5rem); margin-bottom: 8px; }
 .guide .updated { color: var(--muted); font-size: .9rem; margin-top: 0; }
 .guide table { width: 100%; border-collapse: collapse; margin: 12px 0 8px; font-size: .95rem; }
 .guide th, .guide td { text-align: left; padding: 9px 10px; border-bottom: 1px solid var(--border); vertical-align: top; }
 .guide th { width: 38%; color: var(--muted); font-weight: 600; }
+.table-scroll { overflow-x: auto; margin: 12px 0; border: 1px solid var(--border); border-radius: var(--radius); }
+.table-scroll table { min-width: 860px; margin: 0; font-size: .88rem; }
+.guide .wide th { width: auto; }
+.guide .wide thead th { background: var(--surface); }
 .guide .cta { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 18px; margin: 24px 0; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; }
 .guide .cta p { margin: 0; font-weight: 600; }
 .guide-list { list-style: none; padding: 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; }
