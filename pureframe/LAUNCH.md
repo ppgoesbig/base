@@ -85,8 +85,10 @@ GitHub Pages on a private repo needs a paid GitHub plan.
    feeds DuckDuckGo and ChatGPT search.
 3. **Optional analytics:** create a free <https://www.goatcounter.com> site
    and put its code in `config.js` (`goatcounter: 'yourcode'`). It records
-   page views plus `fix`, `zip`, `download` and `upsell-*` events, so you can
-   see the funnel. It's cookie-free, so no consent banner is needed.
+   page views plus the events `add-photos`, `fix`, `fix-ai`, `download`,
+   `audit-csv` and `upsell-limit` / `upsell-zip` / `upsell-settings`, so you
+   can see the funnel. It's cookie-free, so no consent banner is needed. The
+   Pro app never loads analytics.
 
 ## 5. Get the first visitors (one-time pushes that compound)
 
@@ -119,16 +121,19 @@ News, Reddit, short videos and Pinterest are in
 - **Gumroad Discover:** pick the *Software / Design* category and tag
   `amazon seller`, `product photography`, `ecommerce`, `white background`.
 - **Launch discount:** a Gumroad code like `LAUNCH10` ($10 off) for Product
-  Hunt day.
+  Hunt day. Set it to expire at the end of that day in Gumroad, so "today
+  only" stays true.
 
 ### Pricing ideas once sales come in
 
 - Raise to $49 after the first 10–20 reviews.
-- Add a **Studio** variant at $149 (Gumroad *versions*) for agencies and
-  virtual assistants who prepare images for several sellers: same app,
-  licensed for client work.
-- After the 12 months of included rule updates, sell an optional $19
-  "rules update" for the following year.
+- Add a **Team** variant at $149 (Gumroad *versions*) for agencies and
+  virtual-assistant teams: the same app, licensed for up to 5 people. The
+  standard licence already covers one person's client work.
+- Updates: every buyer can re-download the latest file from Gumroad, so rule
+  updates reach everyone. The site promises free updates for at least 12
+  months. If you build a much bigger version later, sell it as a new product
+  (PureFrame Pro 2) with an upgrade discount.
 - Bundle: "Pro + 10-minute product photo lighting guide" if you want to sell
   your expertise.
 

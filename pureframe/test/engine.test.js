@@ -277,3 +277,68 @@ test('snapWhite turns invisible near-white (>=250) into exact white and nothing 
   assert.deepEqual(Array.from(img.data.slice(4, 7)), [249, 255, 255]);
   assert.deepEqual(Array.from(img.data.slice(12, 15)), [120, 130, 140]);
 });
+
+function paint(img, [x0, y0, x1, y1], c) {
+  for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) {
+    const p = (y * img.width + x) * 4; img.data[p] = c[0]; img.data[p + 1] = c[1]; img.data[p + 2] = c[2];
+  }
+}
+
+test('a scuff on the backdrop is a stray mark, not part of the product', () => {
+  const img = scene({ w: 800, h: 600, bg: [238, 238, 238], box: [300, 200, 500, 400], noise: 0 });
+  paint(img, [40, 520, 100, 528], [205, 205, 205]); // 60x8 scuff far from the product
+  const a = E.analyze(img);
+  assert.ok(a.bbox.x0 >= 298 && a.bbox.x1 <= 501 && a.bbox.y1 <= 401, `bbox ${JSON.stringify(a.bbox)}`);
+  assert.equal(a.stray.count, 1);
+  assert.ok(a.stray.pixels >= 400, `stray px ${a.stray.pixels}`);
+  assert.ok(a.fullBbox.x0 <= 40 && a.fullBbox.y1 >= 527, 'fullBbox includes the scuff');
+  assert.ok(Math.abs(a.fill.longest - 1 / 3) < 0.02, `fill ${a.fill.longest}`);
+});
+
+test('pairs and detached handles stay part of the product', () => {
+  const pair = scene({ w: 800, h: 400, bg: [255, 255, 255], box: [60, 100, 260, 300], noise: 0 });
+  paint(pair, [540, 100, 740, 300], [40, 90, 160]); // a second, equally large item far away
+  const a = E.analyze(pair);
+  assert.equal(a.stray.count, 0);
+  assert.ok(a.bbox.x0 <= 61 && a.bbox.x1 >= 739, `pair bbox ${JSON.stringify(a.bbox)}`);
+  const mug = scene({ w: 600, h: 600, bg: [255, 255, 255], box: [150, 150, 400, 450], noise: 0 });
+  paint(mug, [408, 250, 430, 350], [40, 90, 160]); // small handle, 8 px gap
+  const b = E.analyze(mug);
+  assert.equal(b.stray.count, 0);
+  assert.ok(b.bbox.x1 >= 429, `handle kept: ${JSON.stringify(b.bbox)}`);
+});
+
+test('whiten reports backdrop left grey inside an enclosed gap', () => {
+  // Dark ring with a grey hole; a bright highlight caps the exposure lift, so the hole stays grey.
+  const img = scene({ w: 400, h: 400, bg: [226, 226, 226], fg: [40, 40, 40], box: [80, 80, 320, 320], noise: 0 });
+  paint(img, [150, 150, 250, 250], [226, 226, 226]);
+  paint(img, [100, 190, 120, 210], [252, 252, 252]);
+  const r = E.whiten(img);
+  assert.ok(r.enclosed && r.enclosed.regions === 1, JSON.stringify(r.enclosed));
+  assert.ok(r.enclosed.share > 0.05 && r.enclosed.share < 0.08, `share ${r.enclosed.share}`);
+  // Matte product: the lift takes the hole to white, nothing to report.
+  const matte = scene({ w: 400, h: 400, bg: [226, 226, 226], fg: [40, 40, 40], box: [80, 80, 320, 320], noise: 0 });
+  paint(matte, [150, 150, 250, 250], [226, 226, 226]);
+  assert.equal(E.whiten(matte).enclosed.regions, 0);
+});
+
+test('reframing a product cropped by the photo edge keeps the canvas white (no smear)', () => {
+  const src = scene({ w: 400, h: 300, bg: [255, 255, 255], fg: [40, 90, 160], box: [100, 150, 300, 450], noise: 0 });
+  const a = E.analyze(src);
+  assert.equal(a.touches.bottom, true);
+  const L = E.computeLayout(a.bbox, 400, 300, 1000, 1000, 0.85);
+  const out = E.render(src, E.canvasLayout(L, 1000, 1000), 1000, 1000);
+  const below = (Math.min(999, L.dy + L.dh + 20) * 1000 + 500) * 4;
+  assert.deepEqual(Array.from(out.data.slice(below, below + 3)), [255, 255, 255]);
+  const inside = ((L.dy + Math.round(L.dh / 2)) * 1000 + 500) * 4;
+  assert.ok(out.data[inside + 2] > 140, 'product drawn');
+});
+
+test('a white plate\'s bright interior is not mistaken for backdrop in a gap', () => {
+  const img = scene({ w: 500, h: 500, bg: [226, 226, 226], fg: [246, 246, 246], box: [100, 100, 400, 400], noise: 1 });
+  for (let y = 0; y < 500; y++) for (let x = 0; x < 500; x++) {
+    const r = Math.hypot(x + 0.5 - 250, y + 0.5 - 250);
+    if (r > 146 && r <= 150) { const p = (y * 500 + x) * 4; img.data[p] = img.data[p + 1] = img.data[p + 2] = 205; }
+  }
+  assert.equal(E.whiten(img).enclosed.regions, 0);
+});

@@ -31,13 +31,29 @@
     out: null,
     items: [],
     fixedIds: loadQuota(),
-    busy: false,
+    quotaDay: today(),
     catalog: null,
+    exporting: false,
+    cancelExport: false,
+    canvasExact: true, // false when the browser adds anti-fingerprinting noise to canvas pixels
   };
   let nextId = 1;
 
   // ---------- helpers ----------
-  const frame = () => new Promise((r) => requestAnimationFrame(() => setTimeout(r, 0)));
+  /* Yields so the page can repaint between heavy steps. Background tabs don't
+   * run requestAnimationFrame (and throttle timers), so there a MessageChannel
+   * task keeps a long batch moving. */
+  function frame() {
+    return new Promise((resolve) => {
+      let done = false;
+      const finish = () => { if (!done) { done = true; document.removeEventListener('visibilitychange', onVis); resolve(); } };
+      const viaMessage = () => { const c = new MessageChannel(); c.port1.onmessage = finish; c.port2.postMessage(0); };
+      const onVis = () => { if (document.hidden) viaMessage(); };
+      if (document.hidden) { viaMessage(); return; }
+      document.addEventListener('visibilitychange', onVis);
+      requestAnimationFrame(() => setTimeout(finish, 0));
+    });
+  }
   const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const EXT_TYPES = { jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', gif: 'image/gif', webp: 'image/webp', bmp: 'image/bmp', tif: 'image/tiff', tiff: 'image/tiff', heic: 'image/heic', avif: 'image/avif' };
   const fileType = (f) => f.type || EXT_TYPES[(f.name.split('.').pop() || '').toLowerCase()] || '';
@@ -58,6 +74,11 @@
         await img.decode();
         return img;
       } catch (e2) {
+        if (blob.name) {
+          try { await blob.slice(0, 1).arrayBuffer(); } catch (e3) {
+            throw new Error(`${blob.name} changed or was moved after you added it. Remove it and add it again.`);
+          }
+        }
         throw new Error('Your browser can\'t open this file. Save it as JPEG or PNG and try again.');
       } finally {
         URL.revokeObjectURL(url);
@@ -137,15 +158,17 @@
     runQueue();
   }
 
-  async function runQueue() {
-    if (state.busy) return;
-    state.busy = true;
-    try {
-      let item;
-      while ((item = state.items.find((i) => i.status === 'pending'))) await check(item);
-    } finally {
-      state.busy = false;
+  // Checks pending photos one at a time. Every caller shares the same run, so
+  // `await runQueue()` really waits until all added photos are checked.
+  let queue = null;
+  function runQueue() {
+    if (!queue) {
+      queue = (async () => {
+        let item;
+        while ((item = state.items.find((i) => i.status === 'pending' && !i.removed))) await check(item);
+      })().finally(() => { queue = null; });
     }
+    return queue;
   }
 
   async function check(item) {
@@ -174,7 +197,16 @@
     if (state.items.includes(item)) { renderItem(item); renderSummary(); }
   }
 
-  const canFix = (item) => PRO || state.fixedIds.has(signature(item)) || state.fixedIds.size < CFG.freeFixLimit;
+  function refreshQuota() {
+    if (state.quotaDay !== today()) { state.fixedIds = new Set(); state.quotaDay = today(); }
+    const q = store.get('quota');
+    if (q && q.day === today() && Array.isArray(q.ids)) q.ids.forEach((id) => state.fixedIds.add(id));
+  }
+  const canFix = (item) => {
+    if (PRO) return true;
+    refreshQuota();
+    return state.fixedIds.has(signature(item)) || state.fixedIds.size < CFG.freeFixLimit;
+  };
   const isStale = (item) => item.fixed && item.fixed.key !== fixKey();
 
   const AI_MAX = 2400;     // working size for AI cut-outs
@@ -200,7 +232,8 @@
           await window.PFCutout.load((got, total) => setStage(total ? `Loading on-device AI… ${Math.min(100, Math.round((got / total) * 100))}%` : 'Loading on-device AI…'));
           setStage('Removing background…');
           await frame();
-          const work = toImageData(src, Math.min(WORK_MAX, AI_MAX)), small = toImageData(src, REFINE_MAX);
+          let work = toImageData(src, Math.min(WORK_MAX, AI_MAX)), small = toImageData(src, REFINE_MAX);
+          if (E.hasTransparency(work)) { work = E.composite(work); small = E.composite(small); }
           const coarse = await window.PFCutout.coarseMask(small);
           const alphaSmall = Mt.refine(coarse, window.PFCutout.SIZE, window.PFCutout.SIZE, small);
           const bg = Mt.backgroundEstimate(small, alphaSmall, Math.max(4, Math.round(Math.max(small.width, small.height) / 100)));
@@ -226,7 +259,7 @@
       if (after && after.busy && !aiTried && state.settings.cutout !== 'off' && window.PFCutout) {
         return prepareAI(item, setStage);
       }
-      return { img: white.img, bbox: after && after.bbox, ws: work.width / w, ai: false, skipped: white.skipped || (after && after.busy ? 'busy-background' : null), aiError };
+      return { img: white.img, bbox: after && after.bbox, ws: work.width / w, ai: false, skipped: white.skipped || (after && after.busy ? 'busy-background' : null), aiError, enclosed: white.enclosed };
     } finally {
       release(src);
     }
@@ -241,10 +274,12 @@
    * PROOF_MARGIN px from the product is exactly #FFFFFF in the saved file.
    * Keeps the cleanest candidate that fits the size limit. */
   async function proofEncode(canvas, rendered, out, preset) {
-    const strictWanted = preset.background !== 'any' && !!window.PFProof && rendered.width * rendered.height <= PROOF_MAX_PX;
+    const strictWanted = preset.background !== 'any' && !!window.PFProof && state.canvasExact && rendered.width * rendered.height <= PROOF_MAX_PX;
     const pngOK = preset.formats.includes('image/png');
     const plan = out.type === 'image/png' ? [['image/png']]
-      : strictWanted ? [['image/jpeg', out.quality], ...[0.98, 1].filter((q) => q > out.quality).map((q) => ['image/jpeg', q]), ...(pngOK ? [['image/png']] : [])]
+      // Below quality 1.0 browsers subsample colour in 16 px blocks, which leaves
+      // off-white pixels near edges; 0.98 never cleared them in testing, so go straight to 1.0.
+      : strictWanted ? [['image/jpeg', out.quality], ...(out.quality < 1 ? [['image/jpeg', 1]] : []), ...(pngOK ? [['image/png']] : [])]
       : [['image/jpeg', out.quality]];
     let best = null, attempts = 0;
     for (const [type, q] of plan) {
@@ -262,7 +297,7 @@
       const src = await decode(blob);
       const decoded = toImageData(src, Infinity);
       release(src);
-      const strict = window.PFProof && decoded.width === rendered.width && decoded.height === rendered.height && rendered.width * rendered.height <= PROOF_MAX_PX
+      const strict = window.PFProof && state.canvasExact && decoded.width === rendered.width && decoded.height === rendered.height && rendered.width * rendered.height <= PROOF_MAX_PX
         ? window.PFProof.strictBackground(rendered, decoded, { margin: PROOF_MARGIN }) : null;
       const cand = { blob, decoded, strict, type, encoder: type === 'image/png' ? 'PNG' : quality ? `JPEG q${Math.round(quality * 100)}` : 'JPEG (size-limited)' };
       if (!best || (strict && best.strict && strict.nonWhite < best.strict.nonWhite)) best = cand;
@@ -277,7 +312,7 @@
   async function exportPhoto(item, prep, preset, out, nameFor) {
     const reframe = state.settings.reframe && prep.bbox;
     const layout = E.computeLayout(reframe ? prep.bbox : null, prep.img.width, prep.img.height, out.width, out.height, reframe ? out.fill : 0);
-    const img = E.render(prep.img, layout, out.width, out.height);
+    const img = E.render(prep.img, E.canvasLayout(layout, out.width, out.height), out.width, out.height);
     if (!prep.skipped) E.snapWhite(img, 250);
     await frame();
     const canvas = document.createElement('canvas');
@@ -306,9 +341,14 @@
     if (prep.skipped) {
       notes.push('The background is too busy to clean automatically, so it was left as is. Turn on "AI cut-out" in Fix settings, or remove the background in another tool first.');
       // The white padding would read as a clean backdrop; keep the original verdict.
-      const orig = item.report.checks.find((c) => c.id === 'background');
+      const orig = R.evaluate(item.analysis, item.info, preset).checks.find((c) => c.id === 'background');
       report.checks = report.checks.filter((c) => c.id !== 'framing').map((c) => (c.id === 'background' && orig ? orig : c));
     }
+    if (prep.enclosed && prep.enclosed.regions && preset.background !== 'any') {
+      report.checks.push({ id: 'enclosed', status: 'warn', label: 'Grey inside gaps',
+        detail: `Backdrop showing through ${prep.enclosed.regions > 1 ? `${prep.enclosed.regions} gaps` : 'a gap'} (inside a handle or between parts) stayed as shot, about ${Math.max(0.1, prep.enclosed.share * 100).toFixed(1)}% of the photo. Whiten it in an editor, or try AI cut-out: Always.` });
+    }
+    if (!state.canvasExact) notes.push('Your browser adds tiny random changes to image pixels (a privacy setting), so PureFrame can\'t verify the saved file pixel by pixel here. Try another browser or turn off fingerprinting protection for this page.');
     const enlarged = layout.scale * prep.ws;
     if (enlarged > 2) {
       report.checks.push({ id: 'upscaled', status: 'warn', label: 'Enlarged from a small original',
@@ -327,7 +367,9 @@
   }
 
   async function fix(item) {
+    if (item.removed) return false;
     if (!canFix(item)) { upsell('limit'); return false; }
+    const preset = state.preset;
     item.status = 'fixing';
     item.fixError = null;
     item.stage = '';
@@ -341,31 +383,37 @@
     try {
       const out = outputSpec(), key = fixKey();
       const prep = await prepare(item, setStage);
+      if (item.removed) return false;
       setStage('Exporting and re-checking…');
-      const entries = catalogEntries(state.items.filter((i) => i.status !== 'error'));
+      const entries = catalogEntries(state.items.filter((i) => i.status !== 'error' && !i.removed));
       const entry = entries && entries.get(item.id);
-      const nameFor = entry && entry.record ? (ext) => window.PFCatalog.name(entry, state.preset.id, ext).name : null;
-      const result = await exportPhoto(item, prep, state.preset, out, nameFor);
+      const nameFor = entry && entry.record ? (ext) => window.PFCatalog.name(entry, preset.id, ext).name : null;
+      const result = await exportPhoto(item, prep, preset, out, nameFor);
+      if (item.removed) return false;
       if (item.fixed) URL.revokeObjectURL(item.fixed.url);
       item.fixed = Object.assign(result, { url: URL.createObjectURL(result.blob), key, ai: prep.ai });
       item.showBefore = false;
-      if (!PRO) { state.fixedIds.add(signature(item)); saveQuota(); }
+      // A photo left as shot (busy background, AI unavailable) doesn't use up a free fix.
+      if (!PRO && !prep.skipped) { refreshQuota(); state.fixedIds.add(signature(item)); saveQuota(); }
       track(prep.ai ? 'fix-ai' : 'fix');
     } catch (err) {
       item.fixError = err.message || String(err);
     }
+    if (item.removed) return false;
     item.status = 'ready';
-    if (state.items.includes(item)) { renderItem(item); renderSummary(); }
+    renderItem(item); renderSummary();
     return true;
   }
 
   async function fixAll() {
+    let limited = false;
     for (const item of state.items.slice()) {
-      if (item.status !== 'ready' || (item.fixed && !isStale(item))) continue;
-      if (!canFix(item)) { upsell('limit'); return false; }
+      if (item.removed || item.status !== 'ready' || (item.fixed && !isStale(item))) continue;
+      if (!canFix(item)) { limited = true; continue; }
       await fix(item);
     }
-    return true;
+    if (limited) upsell('limit');
+    return !limited;
   }
 
   // ---------- free audit report: every photo x every marketplace ----------
@@ -432,14 +480,30 @@
     await w.close();
   }
 
+  // A new, uniquely named folder inside the one the user picked, so an export
+  // never overwrites anything already there (such as the original photos).
+  async function freshExportDir(parent) {
+    const d = new Date(), pad = (n) => String(n).padStart(2, '0');
+    const base = `PureFrame export ${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}-${pad(d.getMinutes())}`;
+    for (let n = 1; n < 100; n++) {
+      const name = n === 1 ? base : `${base} (${n})`;
+      try { await parent.getDirectoryHandle(name); } catch (e) { return parent.getDirectoryHandle(name, { create: true }); }
+    }
+    throw new Error('Couldn\'t create an export folder there.');
+  }
+
+  // Windows refuses some names (CON, PRN, AUX, NUL, COM1-9, LPT1-9) even with an extension.
+  const safeName = (name) => name.replace(/^(con|prn|aux|nul|com\d|lpt\d)(?=\.|$)/i, '$1_');
+
   async function runExport(toFolder) {
+    if (state.exporting) return;
     const targets = exportTargets(), progress = (t) => { $('exportProgress').textContent = t; };
     if (!targets.length) { progress('Pick at least one marketplace.'); return; }
     store.set('targets', targets.map((p) => p.id));
     let dir = null;
     if (toFolder) {
       try {
-        dir = await window.showDirectoryPicker({ mode: 'readwrite', id: 'pureframe-export' });
+        dir = await freshExportDir(await window.showDirectoryPicker({ mode: 'readwrite', id: 'pureframe-export' }));
       } catch (e) {
         if (e && e.name !== 'AbortError') progress(`Couldn't open that folder: ${e.message || e}`);
         return;
@@ -447,12 +511,16 @@
     }
     const buttons = [$('exportZip'), $('exportFolder')];
     buttons.forEach((b) => { b.disabled = true; });
+    state.exporting = true;
+    state.cancelExport = false;
     try {
+      if (state.items.some((i) => i.status === 'pending' || i.status === 'checking')) progress('Checking photos…');
       await runQueue();
-      const items = state.items.filter((i) => i.status === 'ready');
+      const items = state.items.filter((i) => !i.removed && i.analysis && i.status !== 'error');
+      const unreadable = state.items.filter((i) => !i.removed && i.status === 'error').length;
       if (!items.length) { progress('Add some photos first.'); return; }
       const multi = targets.length > 1, entries = catalogEntries(items);
-      const zipFiles = [], records = [], used = new Set();
+      const zipEntries = [], records = [], used = new Set(), failures = [], statuses = [];
       const unique = (path) => {
         let p = path, n = 2;
         const dot = path.lastIndexOf('.');
@@ -460,44 +528,60 @@
         used.add(p.toLowerCase());
         return p;
       };
-      let done = 0;
-      for (let k = 0; k < items.length; k++) {
+      // Each file is written (folder) or kept as a Blob with its CRC (ZIP) right
+      // away, so memory holds one photo's bytes at a time, not the whole batch.
+      const save = async (path, blob) => {
+        if (dir) { await writeToFolder(dir, path, blob); return; }
+        zipEntries.push({ name: path, blob, crc: Z.crc32(new Uint8Array(await blob.arrayBuffer())) });
+      };
+      for (let k = 0; k < items.length && !state.cancelExport; k++) {
         const item = items[k], label = `Photo ${k + 1} of ${items.length}`;
-        const prep = await prepare(item, (t) => progress(`${label}: ${t}`));
+        let prep;
+        try {
+          prep = await prepare(item, (t) => progress(`${label}: ${t}`));
+        } catch (err) {
+          failures.push(`${item.file.name}: ${err.message || err}`);
+          continue;
+        }
         for (const p of targets) {
+          if (state.cancelExport) break;
           progress(`${label}: exporting for ${p.name}…`);
-          const entry = entries && entries.get(item.id);
-          const nameFor = entry && entry.record ? (ext) => window.PFCatalog.name(entry, p.id, ext).name : null;
-          const res = await exportPhoto(item, prep, p, outFor(p), nameFor);
-          const path = unique((multi ? `${folderName(p)}/` : '') + res.name);
-          if (dir) await writeToFolder(dir, path, res.blob);
-          else zipFiles.push({ name: path, data: new Uint8Array(await res.blob.arrayBuffer()) });
-          if (res.evidence) records.push(Object.assign(res.evidence, { file: path, source: item.file.name }));
-          done++;
+          try {
+            const entry = entries && entries.get(item.id);
+            const nameFor = entry && entry.record ? (ext) => window.PFCatalog.name(entry, p.id, ext).name : null;
+            const res = await exportPhoto(item, prep, p, outFor(p), nameFor);
+            const path = unique((multi ? `${folderName(p)}/` : '') + safeName(res.name));
+            await save(path, res.blob);
+            statuses.push(res.report.status);
+            if (res.evidence) records.push(Object.assign(res.evidence, { file: path, source: item.file.name }));
+          } catch (err) {
+            failures.push(`${item.file.name} for ${p.name}: ${err.message || err}`);
+          }
         }
       }
+      if (state.cancelExport) { progress('Export cancelled. Nothing was downloaded.'); return; }
       if ($('exportReport').checked && records.length && window.PFProof) {
         const stamp = new Date().toLocaleString();
         // A UTF-8 byte order mark makes Excel on Windows read non-English names correctly.
-        const csv = new Blob(['\ufeff' + window.PFProof.toCSV(records)], { type: 'text/csv;charset=utf-8' });
-        const html = new Blob([window.PFProof.reportHTML(records, { title: 'PureFrame evidence report', generatedAt: stamp, product: 'PureFrame Pro' })], { type: 'text/html' });
-        if (dir) { await writeToFolder(dir, 'evidence-report.csv', csv); await writeToFolder(dir, 'evidence-report.html', html); }
-        else {
-          zipFiles.push({ name: 'evidence-report.csv', data: new Uint8Array(await csv.arrayBuffer()) });
-          zipFiles.push({ name: 'evidence-report.html', data: new Uint8Array(await html.arrayBuffer()) });
-        }
+        await save('evidence-report.csv', new Blob(['\ufeff' + window.PFProof.toCSV(records)], { type: 'text/csv;charset=utf-8' }));
+        await save('evidence-report.html', new Blob([window.PFProof.reportHTML(records, { title: 'PureFrame evidence report', generatedAt: stamp, product: 'PureFrame Pro' })], { type: 'text/html' }));
       }
-      if (!dir) {
+      if (!dir && zipEntries.length) {
         const date = new Date().toISOString().slice(0, 10);
-        const label = multi ? 'marketplaces' : targets[0].id;
-        download(new Blob([Z.build(zipFiles)], { type: 'application/zip' }), `pureframe-${label}-${date}.zip`);
+        download(Z.buildBlob(zipEntries), `pureframe-${multi ? 'marketplaces' : targets[0].id}-${date}.zip`);
       }
-      const failed = records.filter((r) => r.status === 'fail').length;
-      progress(`Done: ${done} file${done === 1 ? '' : 's'} for ${targets.length} marketplace${targets.length === 1 ? '' : 's'}${dir ? ', saved to the folder you chose' : ''}.${failed ? ` ${failed} still fail a check; see the evidence report.` : ' Every file passed the measurable checks.'}`);
+      const done = statuses.length, failed = statuses.filter((x) => x === 'fail').length, warned = statuses.filter((x) => x === 'warn').length;
+      const parts = [`Done: ${done} file${done === 1 ? '' : 's'} for ${targets.length} marketplace${targets.length === 1 ? '' : 's'}${dir ? `, saved in a new folder "${dir.name}"` : ''}.`];
+      if (failed || warned) parts.push(`${failed ? `${failed} fail a check` : ''}${failed && warned ? ' and ' : ''}${warned ? `${warned} have warnings` : ''}${records.length && $('exportReport').checked ? '; see the evidence report' : ''}.`);
+      else if (done) parts.push('Every file passed the measurable checks.');
+      if (failures.length) parts.push(`Couldn't export ${failures.length}: ${failures.slice(0, 3).join('; ')}${failures.length > 3 ? '…' : ''}`);
+      if (unreadable) parts.push(`${unreadable} photo${unreadable === 1 ? '' : 's'} couldn't be read and ${unreadable === 1 ? 'was' : 'were'} skipped.`);
+      progress(parts.join(' '));
       track('export');
     } catch (err) {
       progress(`Export stopped: ${err.message || err}`);
     } finally {
+      state.exporting = false;
       buttons.forEach((b) => { b.disabled = false; });
     }
   }
@@ -529,6 +613,7 @@
   }
 
   function remove(item) {
+    item.removed = true;
     if (item.thumb) URL.revokeObjectURL(item.thumb);
     if (item.fixed) URL.revokeObjectURL(item.fixed.url);
     state.items = state.items.filter((i) => i !== item);
@@ -619,6 +704,7 @@
   }
 
   function renderItem(item) {
+    if (item.removed) return;
     let li = $('item-' + item.id);
     if (!li) {
       li = document.createElement('li');
@@ -763,8 +849,24 @@
     syncSettingsUI();
     renderRules();
     for (const id of ['tolerance', 'levels', 'reframe', 'cutout', 'shadow', 'outW', 'outH', 'fill', 'outType', 'quality', 'naming']) {
-      $(id).addEventListener(id === 'tolerance' || id === 'fill' ? 'input' : 'change', onSettingsChange);
+      $(id).addEventListener('change', onSettingsChange);
     }
+    // Sliders: live labels while dragging; the cards are rebuilt on release.
+    $('tolerance').addEventListener('input', () => { $('tolOut').textContent = $('tolerance').value; });
+    $('fill').addEventListener('input', () => { $('fillOut').textContent = $('fill').value + '%'; });
+
+    // Privacy browsers (Brave shields, Firefox resist-fingerprinting) add noise to
+    // canvas reads, which would make pixel-exact verification meaningless.
+    try {
+      const c = document.createElement('canvas');
+      c.width = c.height = 4;
+      const ctx = c.getContext('2d', { willReadFrequently: true });
+      const probe = new ImageData(4, 4);
+      for (let i = 0; i < probe.data.length; i += 4) { probe.data[i] = (i * 7) % 256; probe.data[i + 1] = 255; probe.data[i + 2] = 128; probe.data[i + 3] = 255; }
+      ctx.putImageData(probe, 0, 0);
+      const back = ctx.getImageData(0, 0, 4, 4).data;
+      state.canvasExact = back.every((v, i) => v === probe.data[i]);
+    } catch (e) { state.canvasExact = true; }
     if (!PRO) {
       const fs = $('proFields');
       for (const el of fs.querySelectorAll('input, select')) el.tabIndex = -1;
@@ -822,6 +924,7 @@
     $('exportZip').addEventListener('click', () => runExport(false));
     $('exportFolder').addEventListener('click', () => runExport(true));
     $('exportTargets').addEventListener('change', renderCatalog);
+    $('exportDlg').addEventListener('close', () => { if (state.exporting) state.cancelExport = true; });
     $('catalogBtn').addEventListener('click', () => $('catalogInput').click());
     $('catalogClear').addEventListener('click', () => { state.catalog = null; renderCatalog(); $('catalogStatus').textContent = 'Spreadsheet removed. Photos keep their usual names.'; });
     $('catalogInput').addEventListener('change', async () => {

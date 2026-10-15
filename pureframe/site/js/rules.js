@@ -201,6 +201,13 @@
       }
     }
 
+    // Stray marks on the backdrop (dust, scuffs, crumbs), kept out of the product box
+    if (!busy && a.stray && a.stray.count > 0 && a.stray.pixels >= 9) {
+      const n = a.stray.count;
+      add('marks', preset.background === 'any' ? 'info' : 'warn', 'Marks on the background',
+        `${n} small spot${n > 1 ? 's' : ''} away from the product ${n > 1 ? "aren't" : "isn't"} background (dust, a scuff or a crumb). Retouch ${n > 1 ? 'them' : 'it'}, or check ${n > 1 ? 'they belong' : 'it belongs'} to the product.`);
+    }
+
     // Dimensions
     const dims = `${W.toLocaleString('en-US')} × ${H.toLocaleString('en-US')} px`;
     if (preset.minLongest && longest < preset.minLongest) {

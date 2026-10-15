@@ -100,3 +100,14 @@ test('fileName does not double an existing Amazon variant code', () => {
   assert.equal(R.fileName('{name}', info, '.jpg'), 'B0C1234567.MAIN.jpg');
   assert.equal(R.fileName('{name}.PT{nn}', { ...info, name: 'B0C1234567.PT02', index: 4 }, '.jpg'), 'B0C1234567.PT04.jpg');
 });
+
+test('stray marks on the backdrop are flagged (warn where white matters, info on Etsy)', () => {
+  const a = clone(good);
+  a.stray = { count: 2, pixels: 480 };
+  const c = byId(R.evaluate(a, file, R.preset('amazon')), 'marks');
+  assert.equal(c.status, 'warn');
+  assert.match(c.detail, /2 small spots/);
+  assert.equal(byId(R.evaluate(a, file, R.preset('etsy')), 'marks').status, 'info');
+  a.stray = { count: 1, pixels: 4 };
+  assert.equal(byId(R.evaluate(a, file, R.preset('amazon')), 'marks'), undefined, 'ignores sensor-noise specks');
+});

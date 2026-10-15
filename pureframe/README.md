@@ -45,8 +45,8 @@ vendor/                 ONNX Runtime Web (MIT) and the U-2-Netp model (Apache-2.
 
 1. **Backdrop model.** A per-channel median of the border, plus a quadratic
    lighting surface fitted to it, so sweeps and vignettes are followed instead
-   of being mistaken for product. A busy border (lifestyle shot) is detected and
-   left alone.
+   of being mistaken for product. A busy or textured border (lifestyle shot)
+   sends the photo to the AI cut-out below instead.
 2. **Backdrop mask.** A scanline flood fill from the border through
    backdrop-like pixels. Enclosed areas, such as a white plate's centre, are
    never touched.
@@ -55,9 +55,14 @@ vendor/                 ONNX Runtime Web (MIT) and the U-2-Netp model (Apache-2.
    never clip.
 4. **Shadows.** Soft shadows ramp smoothly into the white instead of ending in
    a hard edge. Product edges are feathered over 2 px.
-5. **Framing.** The product is cropped and scaled to the preset's fill
-   (e.g. 88%), centred on the output canvas and resampled with an antialiased
-   filter.
+5. **Framing.** The product is the largest connected region plus anything
+   close to it or of similar size, so pairs and handles stay with it. Dust and
+   scuffs further away are reported as marks and don't distort the framing.
+   The product is scaled to the preset's fill (e.g. 88%) and centred, and the
+   whole canvas is resampled with an antialiased filter. Anything outside the
+   source photo is white.
+   Backdrop showing through enclosed gaps (inside a handle) is reported rather
+   than painted, so white products keep their shading.
 6. **Export and verify.** The saved bytes are decoded and graded again, which
    produces the "after" report. Wherever a white background is required or recommended, every
    background pixel more than 8 px from the product must be exactly #FFFFFF in
@@ -77,6 +82,7 @@ backdrop cleanup and the AI uses border uniformity, border texture
 node --test pureframe/test/*.test.js
 node pureframe/scripts/build.mjs        # SITE_URL=https://your.domain to set canonical URLs
 npx serve pureframe/dist/site
+python3 pureframe/scripts/verify-export.py export.zip   # independent numpy check of an export
 ```
 
 To update marketplace rules, edit `PRESETS` in `site/js/rules.js`. The guide

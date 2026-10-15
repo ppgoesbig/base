@@ -229,9 +229,68 @@
     return { x0, y0, x1, y1 };
   }
 
+  /* Splits the non-backdrop pixels into connected regions on a coarse grid
+   * and picks out the product: the largest region plus anything close to it or
+   * of comparable size (handles, pairs, sets). Everything else is a stray mark:
+   * dust, a scuff on the sweep, a crumb. Returns the grid cells that belong to
+   * the product and the stray tally. */
+  function productGroup(mask, W, H) {
+    const cell = Math.max(1, Math.round(Math.max(W, H) / 400));
+    const gw = Math.ceil(W / cell), gh = Math.ceil(H / cell), G = gw * gh;
+    const count = new Uint32Array(G);
+    for (let y = 0, i = 0; y < H; y++) {
+      const row = ((y / cell) | 0) * gw;
+      for (let x = 0; x < W; x++, i++) if (!mask[i]) count[row + ((x / cell) | 0)]++;
+    }
+    const label = new Int32Array(G).fill(-1), stack = new Int32Array(G), comps = [];
+    for (let s0 = 0; s0 < G; s0++) {
+      if (!count[s0] || label[s0] >= 0) continue;
+      const c = { id: comps.length, pixels: 0, x0: gw, y0: gh, x1: -1, y1: -1 };
+      let sp = 0;
+      stack[sp++] = s0; label[s0] = c.id;
+      while (sp) {
+        const k = stack[--sp], kx = k % gw, ky = (k / gw) | 0;
+        c.pixels += count[k];
+        if (kx < c.x0) c.x0 = kx; if (kx > c.x1) c.x1 = kx; if (ky < c.y0) c.y0 = ky; if (ky > c.y1) c.y1 = ky;
+        for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+          const nx = kx + dx, ny = ky + dy;
+          if (nx < 0 || ny < 0 || nx >= gw || ny >= gh) continue;
+          const nk = ny * gw + nx;
+          if (count[nk] && label[nk] < 0) { label[nk] = c.id; stack[sp++] = nk; }
+        }
+      }
+      comps.push(c);
+    }
+    if (!comps.length) return null;
+    let main = comps[0];
+    for (const c of comps) if (c.pixels > main.pixels) main = c;
+    const inGroup = new Uint8Array(comps.length);
+    inGroup[main.id] = 1;
+    const gb = { x0: main.x0, y0: main.y0, x1: main.x1, y1: main.y1 };
+    const gap = Math.max(1, Math.round(Math.max(gw, gh) * 0.02));
+    for (let changed = true; changed;) {
+      changed = false;
+      for (const c of comps) {
+        if (inGroup[c.id]) continue;
+        const dx = Math.max(0, c.x0 - gb.x1, gb.x0 - c.x1), dy = Math.max(0, c.y0 - gb.y1, gb.y0 - c.y1);
+        if (Math.max(dx, dy) <= gap || c.pixels >= main.pixels * 0.05) {
+          inGroup[c.id] = 1; changed = true;
+          gb.x0 = Math.min(gb.x0, c.x0); gb.y0 = Math.min(gb.y0, c.y0); gb.x1 = Math.max(gb.x1, c.x1); gb.y1 = Math.max(gb.y1, c.y1);
+        }
+      }
+    }
+    let strayCount = 0, strayPixels = 0;
+    for (const c of comps) if (!inGroup[c.id] && c.pixels >= 3) { strayCount++; strayPixels += c.pixels; } // 1-2 px is sensor noise
+    const cellIn = new Uint8Array(G);
+    for (let k = 0; k < G; k++) if (label[k] >= 0 && inGroup[label[k]]) cellIn[k] = 1;
+    return { cell, gw, cellIn, strayCount, strayPixels };
+  }
+
   /* Measures an image the way marketplace checks do:
    *   background  share of backdrop pixels that are pure #FFFFFF / near-white
    *   bbox, fill  product bounds and how much of the frame they span
+   *               (stray marks on the backdrop are excluded and counted in stray)
+   *   fullBbox    bounds of everything that isn't backdrop, marks included
    *   touches     which image edges the product reaches (looks cropped)
    *   uniformity  how plain the border is (low = lifestyle/busy background) */
   function analyze(input, opts) {
@@ -242,15 +301,20 @@
     const model = backdropModel(img, tol);
     const mask = floodBackground(img, model, tol);
 
+    const grp = productGroup(mask, W, H);
     const rows = new Uint32Array(H), cols = new Uint32Array(W);
+    const prows = new Uint32Array(H), pcols = new Uint32Array(W);
     let bgCount = 0;
     for (let y = 0, i = 0; y < H; y++) {
+      const crow = grp ? ((y / grp.cell) | 0) * grp.gw : 0;
       for (let x = 0; x < W; x++, i++) {
-        if (mask[i]) bgCount++;
-        else { rows[y]++; cols[x]++; }
+        if (mask[i]) { bgCount++; continue; }
+        rows[y]++; cols[x]++;
+        if (grp && grp.cellIn[crow + ((x / grp.cell) | 0)]) { prows[y]++; pcols[x]++; }
       }
     }
-    const bbox = boundsFromCounts(rows, cols);
+    const fullBbox = boundsFromCounts(rows, cols);
+    const bbox = grp ? boundsFromCounts(prows, pcols) || fullBbox : fullBbox;
     let fill = null, touches = null;
     if (bbox) {
       const fx = (bbox.x1 - bbox.x0 + 1) / W, fy = (bbox.y1 - bbox.y0 + 1) / H;
@@ -292,7 +356,8 @@
         near: n ? near / n : 0,
         mean: n ? [sr / n, sg / n, sb / n].map(Math.round) : null,
       },
-      bbox, fill, touches,
+      bbox, fill, touches, fullBbox,
+      stray: { count: grp ? grp.strayCount : 0, pixels: grp ? grp.strayPixels : 0 },
     };
   }
 
@@ -308,6 +373,45 @@
     }
   }
 
+  // Grid regions of backdrop-coloured, still non-white pixels the flood fill couldn't reach.
+  function enclosedBackdrop(img, mask, model, tol) {
+    const { width: W, height: H, data } = img;
+    const cell = Math.max(1, Math.round(Math.max(W, H) / 300));
+    const gw = Math.ceil(W / cell), gh = Math.ceil(H / cell), G = gw * gh;
+    const hits = new Uint32Array(G), area = new Uint32Array(G);
+    for (let y = 0, i = 0; y < H; y++) {
+      const row = ((y / cell) | 0) * gw;
+      for (let x = 0; x < W; x++, i++) {
+        const k = row + ((x / cell) | 0), p = i * 4;
+        area[k]++;
+        if (mask[i] || Math.min(data[p], data[p + 1], data[p + 2]) >= 250) continue;
+        // Backdrop seen through a gap matches the backdrop within noise; a white
+        // product's interior is usually brighter than a grey backdrop (it's lit).
+        const q = (((y / model.step) | 0) * model.gw + ((x / model.step) | 0)) * 3, g = model.grid;
+        const lum = data[p] * 0.299 + data[p + 1] * 0.587 + data[p + 2] * 0.114;
+        const bgLum = g[q] * 0.299 + g[q + 1] * 0.587 + g[q + 2] * 0.114;
+        if (distToBackdrop(data, p, model, x, y) <= tol * 0.5 && lum <= bgLum + 3) hits[k]++;
+      }
+    }
+    const on = new Uint8Array(G);
+    for (let k = 0; k < G; k++) if (hits[k] * 2 >= area[k]) on[k] = 1;
+    const seen = new Uint8Array(G), stack = new Int32Array(G), minPx = W * H * 0.0005;
+    let regions = 0, pixels = 0;
+    for (let s0 = 0; s0 < G; s0++) {
+      if (!on[s0] || seen[s0]) continue;
+      let sp = 0, px = 0;
+      stack[sp++] = s0; seen[s0] = 1;
+      while (sp) {
+        const k = stack[--sp], kx = k % gw;
+        px += hits[k];
+        const nb = [kx > 0 ? k - 1 : -1, kx < gw - 1 ? k + 1 : -1, k >= gw ? k - gw : -1, k + gw < G ? k + gw : -1];
+        for (const n of nb) if (n >= 0 && on[n] && !seen[n]) { seen[n] = 1; stack[sp++] = n; }
+      }
+      if (px >= minPx) { regions++; pixels += px; }
+    }
+    return { regions, share: pixels / (W * H) };
+  }
+
   /* Turns the backdrop pure white while keeping the product as shot.
    *  1. Flatten transparency onto white and model the backdrop (colour + fall-off).
    *  2. Flood-fill from the border through backdrop pixels to get the mask.
@@ -321,7 +425,7 @@
     const img = composite(input);
     const { width: W, height: H, data } = img;
     const model = backdropModel(img, DETECT_TOLERANCE);
-    const res = { img, skipped: null, gains: null, backdrop: model.bg, whitened: 0 };
+    const res = { img, skipped: null, gains: null, backdrop: model.bg, whitened: 0, enclosed: null };
     if (model.uniformity < 0.6 || model.roughness > ROUGH) { res.skipped = 'busy-background'; return res; }
 
     const tol = o.tolerance;
@@ -346,6 +450,11 @@
       const g = model.grid;
       for (let q = 0; q < g.length; q += 3) { g[q] *= res.gains[0]; g[q + 1] *= res.gains[1]; g[q + 2] *= res.gains[2]; }
     }
+
+    // Backdrop showing through enclosed gaps (inside a handle, between parts)
+    // isn't reachable from the border, so it isn't whitened: white products keep
+    // their shading. Measure what's left that a checker could read as grey.
+    res.enclosed = enclosedBackdrop(img, mask, model, tol);
 
     // Shadow tails: grow from the backdrop through neutral pixels that are a bit
     // darker than it and change gently (shadows are soft, product edges are
@@ -450,24 +559,39 @@
   }
 
   // 1-D resampling weights with a triangle filter widened when downscaling
-  // (antialiased bilinear, the approach Pillow uses).
+  // (antialiased bilinear, the approach Pillow uses). Source positions outside
+  // the image count as white ("out" weight), so the canvas around a reframed
+  // product is clean instead of smearing edge pixels.
   function weights(srcStart, srcLen, dstLen, srcLimit) {
     const scale = dstLen / srcLen;
     const support = scale < 1 ? 1 / scale : 1;
     const taps = [];
     for (let o = 0; o < dstLen; o++) {
       const center = srcStart + (o + 0.5) / scale;
-      const lo = Math.max(0, Math.floor(center - support)), hi = Math.min(srcLimit - 1, Math.ceil(center + support));
+      const lo = Math.floor(center - support), hi = Math.ceil(center + support);
       const idx = [], w = [];
-      let sum = 0;
+      let sum = 0, out = 0;
       for (let s = lo; s <= hi; s++) {
         const k = 1 - Math.abs(s + 0.5 - center) / support;
-        if (k > 0) { idx.push(s); w.push(k); sum += k; }
+        if (k <= 0) continue;
+        if (s < 0 || s >= srcLimit) out += k; else { idx.push(s); w.push(k); }
+        sum += k;
       }
-      if (!idx.length) { idx.push(Math.min(srcLimit - 1, Math.max(0, Math.floor(center)))); w.push(1); sum = 1; }
-      taps.push({ idx, w: w.map((v) => v / sum) });
+      if (!sum) {
+        const s = Math.floor(center);
+        if (s < 0 || s >= srcLimit) { out = 1; sum = 1; } else { idx.push(s); w.push(1); sum = 1; }
+      }
+      taps.push({ idx, w: w.map((v) => v / sum), out: out / sum });
     }
     return taps;
+  }
+
+  /* Expands a layout so it covers the whole output canvas with the same
+   * transform: everything around the product that falls inside the frame is
+   * kept (and checked) rather than silently dropped. */
+  function canvasLayout(layout, outW, outH) {
+    const s = layout.dw / layout.sw;
+    return { sx: layout.sx - layout.dx / s, sy: layout.sy - layout.dy / s, sw: outW / s, sh: outH / s, dx: 0, dy: 0, dw: outW, dh: outH, scale: layout.scale };
   }
 
   // Draws the layout's source region into a new white outW x outH image.
@@ -476,8 +600,9 @@
     const { sx, sy, sw, sh, dx, dy, dw, dh } = layout;
     const xt = weights(sx, sw, dw, src.width);
     const yt = weights(sy, sh, dh, src.height);
-    let rMin = src.height, rMax = 0;
-    for (const t of yt) { rMin = Math.min(rMin, t.idx[0]); rMax = Math.max(rMax, t.idx[t.idx.length - 1]); }
+    let rMin = src.height, rMax = -1;
+    for (const t of yt) if (t.idx.length) { rMin = Math.min(rMin, t.idx[0]); rMax = Math.max(rMax, t.idx[t.idx.length - 1]); }
+    if (rMax < rMin) return out; // the source doesn't reach the canvas at all
     const rows = rMax - rMin + 1;
     // Horizontal pass into an 8-bit RGB buffer covering only the rows we need.
     const tmp = new Uint8ClampedArray(dw * rows * 3);
@@ -485,8 +610,8 @@
     for (let r = 0; r < rows; r++) {
       const srow = (rMin + r) * src.width;
       for (let x = 0; x < dw; x++) {
-        const { idx, w } = xt[x];
-        let cr = 0, cg = 0, cb = 0;
+        const { idx, w, out: ow } = xt[x];
+        let cr = 255 * ow, cg = cr, cb = cr;
         for (let k = 0; k < idx.length; k++) {
           const p = (srow + idx[k]) * 4, wk = w[k];
           cr += s[p] * wk; cg += s[p + 1] * wk; cb += s[p + 2] * wk;
@@ -497,10 +622,10 @@
     }
     const o = out.data;
     for (let y = 0; y < dh; y++) {
-      const { idx, w } = yt[y];
+      const { idx, w, out: ow } = yt[y];
       const orow = ((dy + y) * outW + dx) * 4;
       for (let x = 0; x < dw; x++) {
-        let cr = 0, cg = 0, cb = 0;
+        let cr = 255 * ow, cg = cr, cb = cr;
         for (let k = 0; k < idx.length; k++) {
           const q = ((idx[k] - rMin) * dw + x) * 3, wk = w[k];
           cr += tmp[q] * wk; cg += tmp[q + 1] * wk; cb += tmp[q + 2] * wk;
@@ -544,6 +669,6 @@
 
   return {
     DETECT_TOLERANCE, ROUGH, createImage, composite, hasTransparency, backdropModel,
-    floodBackground, analyze, whiten, snapWhite, computeLayout, render, jpegInfo,
+    floodBackground, analyze, whiten, snapWhite, computeLayout, canvasLayout, render, jpegInfo,
   };
 });

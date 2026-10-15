@@ -10,8 +10,14 @@
 (function () {
   'use strict';
   const SIZE = 320;
+  const STALL_MS = 30000; // give up on a download that receives nothing for this long
   const cfg = () => window.PF_CONFIG || {};
   let loading = null;
+  // Every caller of load() gets progress, including one that joins a download
+  // already started in the background.
+  const listeners = new Set();
+  let lastProgress = null;
+  const emit = (got, total) => { lastProgress = [got, total]; listeners.forEach((fn) => { try { fn(got, total); } catch (e) { /* ignore */ } }); };
 
   function fromBase64(s) {
     const bin = atob(s), out = new Uint8Array(bin.length);
@@ -29,27 +35,43 @@
     });
   }
 
-  // Fetch with progress reporting (bytes received / total).
-  async function fetchBytes(url, onBytes) {
-    const res = await fetch(url);
-    if (!res.ok) throw new Error(`Couldn't download ${url} (${res.status}).`);
-    const total = +res.headers.get('content-length') || 0;
-    if (!res.body || !res.body.getReader) return new Uint8Array(await res.arrayBuffer());
-    const reader = res.body.getReader(), chunks = [];
-    let got = 0;
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      chunks.push(value); got += value.length;
-      if (onBytes) onBytes(got, total);
+  // Fetch with progress reporting (bytes received / total) and stall detection.
+  async function fetchBytes(url, onBytes, asText) {
+    const ctrl = typeof AbortController === 'function' ? new AbortController() : null;
+    let timer = null;
+    const arm = () => {
+      clearTimeout(timer);
+      if (ctrl) timer = setTimeout(() => ctrl.abort(), STALL_MS);
+    };
+    arm();
+    try {
+      const res = await fetch(url, ctrl ? { signal: ctrl.signal } : undefined);
+      if (!res.ok) throw new Error(`Couldn't download ${url} (${res.status}).`);
+      if (asText) return await res.text();
+      const total = +res.headers.get('content-length') || 0;
+      if (!res.body || !res.body.getReader) return new Uint8Array(await res.arrayBuffer());
+      const reader = res.body.getReader(), chunks = [];
+      let got = 0;
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        arm();
+        chunks.push(value); got += value.length;
+        if (onBytes) onBytes(got, total);
+      }
+      const out = new Uint8Array(got);
+      let pos = 0;
+      for (const c of chunks) { out.set(c, pos); pos += c.length; }
+      return out;
+    } catch (err) {
+      if (err && err.name === 'AbortError') throw new Error('The AI download stalled. Check your connection and try again.');
+      throw err;
+    } finally {
+      clearTimeout(timer);
     }
-    const out = new Uint8Array(got);
-    let pos = 0;
-    for (const c of chunks) { out.set(c, pos); pos += c.length; }
-    return out;
   }
 
-  async function assets(onProgress) {
+  async function assets() {
     const c = cfg();
     if (c.aiAssets === 'script') {
       if (!window.PF_AI_ASSETS) await loadScript(c.aiScript || 'PureFrame AI.js');
@@ -58,13 +80,9 @@
     }
     const base = c.aiBase || 'vendor/';
     const parts = { wasm: [0, 0], model: [0, 0] };
-    const report = () => {
-      if (!onProgress) return;
-      const got = parts.wasm[0] + parts.model[0], total = parts.wasm[1] + parts.model[1];
-      onProgress(got, total);
-    };
+    const report = () => emit(parts.wasm[0] + parts.model[0], parts.wasm[1] + parts.model[1]);
     const [ortSource, wasm, model] = await Promise.all([
-      fetch(base + 'ort.wasm.bundle.min.mjs').then((r) => { if (!r.ok) throw new Error('Couldn\'t download the AI runtime.'); return r.text(); }),
+      fetchBytes(base + 'ort.wasm.bundle.min.mjs', null, true),
       fetchBytes(base + 'ort-wasm-simd-threaded.wasm', (g, t) => { parts.wasm = [g, t]; report(); }),
       fetchBytes(base + 'u2netp.onnx', (g, t) => { parts.model = [g, t]; report(); }),
     ]);
@@ -74,9 +92,13 @@
   /* Loads the runtime and model once. onProgress(gotBytes, totalBytes) fires
    * while downloading on the website. */
   function load(onProgress) {
+    if (onProgress) {
+      listeners.add(onProgress);
+      if (lastProgress) onProgress(lastProgress[0], lastProgress[1]);
+    }
     if (!loading) {
       loading = (async () => {
-        const a = await assets(onProgress);
+        const a = await assets();
         // Importing from a blob URL works both over http and from file://.
         const url = URL.createObjectURL(new Blob([a.ortSource], { type: 'text/javascript' }));
         let ort;
@@ -85,7 +107,8 @@
         ort.env.wasm.numThreads = 1; // static hosting can't enable cross-origin isolation
         const session = await ort.InferenceSession.create(a.model, { executionProviders: ['wasm'], graphOptimizationLevel: 'all' });
         return { ort, session };
-      })().catch((err) => { loading = null; throw err; });
+      })().catch((err) => { loading = null; lastProgress = null; throw err; });
+      loading.then(() => listeners.clear(), () => listeners.clear());
     }
     return loading;
   }

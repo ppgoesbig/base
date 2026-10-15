@@ -10,7 +10,7 @@ answer comments, and follow each community's self-promotion rules.
 
 **Name:** PureFrame
 
-**Tagline (60 chars max):** Prove your product photos pass every marketplace check
+**Tagline (60 chars max):** Check, fix and re-verify product photos for 7 marketplaces
 
 **Description:**
 > See how every product photo scores against Amazon, Walmart, TikTok Shop,
@@ -19,7 +19,8 @@ answer comments, and follow each community's self-promotion rules.
 > the saved file, so the background is still exactly #FFFFFF after JPEG
 > compression. Nothing is uploaded. Free checks; Pro ($39 once) exports
 > every photo for every marketplace, with spreadsheet naming and an evidence
-> report.
+> report. It measures the published image rules; content rules (no text,
+> logos or props) still need your eye.
 
 **First comment (maker):**
 > Hi Product Hunt! Main images get flagged for things you can't see: a
@@ -41,7 +42,7 @@ answer comments, and follow each community's self-promotion rules.
 
 ## Hacker News (Show HN)
 
-**Title:** Show HN: PureFrame – proves product photos pass marketplace image checks, in-browser
+**Title:** Show HN: PureFrame – checks and re-verifies product photos against marketplace image rules, in-browser
 
 **Text:**
 > Amazon, Walmart and TikTok Shop want main images on exactly #FFFFFF with
@@ -61,7 +62,8 @@ answer comments, and follow each community's self-promotion rules.
 > - **Proof:** it encodes the JPEG, decodes it again, and checks every
 >   background pixel more than 8 px from the product. Where a white
 >   background is required or recommended, it steps the quality up (and
->   falls back to PNG) until they're all 255. An independent numpy check of the exports agrees.
+>   falls back to PNG) until they're all 255. `scripts/verify-export.py`
+>   re-checks an export with numpy only, no PureFrame code.
 > - **Packaging:** no framework or build step for the app. The paid version
 >   is the same code plus the model, shipped as files that run from file://.
 >
@@ -92,8 +94,9 @@ r/shopify. Answer the question first; the link is optional.
 
 ## Short video script (TikTok / Reels / YouTube Shorts, 15–20 s)
 
-1. **0–2 s:** a screenshot of a flagged listing or an Amazon email about the
-   main image. Text overlay: *"Amazon flagged my main image 😩"*
+1. **0–2 s:** your original photo on its grey or busy background. Text
+   overlay: *"Is this white enough for Amazon?"* (Don't mock up Amazon emails
+   or Seller Central screens; show your own photo.)
 2. **2–6 s:** drop the photo into PureFrame; the red checks appear.
    Overlay: *"Background: rgb(236,236,236) ✕ · Fill: 61% ✕"*
 3. **6–10 s:** click **Fix**; cut to the after image with green checks.

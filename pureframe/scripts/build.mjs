@@ -77,7 +77,7 @@ function rejections(p) {
   if (p.fill) list.push(['Too much empty space', `Products shot from a distance end up small in the frame. Crop and scale so the product spans ${Math.round(p.fill * 100)}% or more of the image.`]);
   list.push(['Too small for zoom', 'Low-resolution photos look soft and can disable zoom. Export at the recommended size from the largest original you have.']);
   if (p.aspect && p.aspectRule === 'required') list.push(['Wrong shape', `${p.name} requires square images. Pad the photo onto a square white canvas instead of stretching it.`]);
-  list.push(['Added text, logos or borders', 'Badges, watermarks, "sale" text and frames are banned from main images. Remove them in your editor; no automated tool can judge content for you.']);
+  if (p.background !== 'any' && p.id !== 'shopify') list.push(['Added text, logos or borders', `${p.name} doesn't allow badges, watermarks, "sale" text or frames on the main image. Remove them in your editor; no automated tool can judge content for you.`]);
   return list;
 }
 
@@ -139,7 +139,7 @@ for (const p of R.PRESETS) {
 <table><tbody>${rows.map(([k, v]) => `<tr><th scope="row">${esc(k)}</th><td>${esc(v)}</td></tr>`).join('')}</tbody></table>
 <h2>Checklist</h2>
 <ul>${p.rules.map((r) => `<li>${esc(r)}</li>`).join('')}</ul>
-<h2>Why ${esc(p.name)} photos get rejected</h2>
+<h2>${p.background === 'required' ? `Why ${esc(p.name)} photos get rejected` : `Common problems with ${esc(p.name)} photos`}</h2>
 ${rej.map(([h, t]) => `<h3>${esc(h)}</h3><p>${esc(t)}</p>`).join('\n')}
 <h2>Fix a photo in seconds</h2>
 <ol>
@@ -235,6 +235,7 @@ pro = pro.replace('<link rel="stylesheet" href="css/styles.css">', () => `<style
 pro = pro.replace('<script src="js/config.js"></script>', () => `<script>window.PF_CONFIG = { edition: 'pro', proUrl: '', price: '', freeFixLimit: Infinity, goatcounter: '', aiAssets: 'script', aiScript: 'PureFrame AI.js' };</script>`);
 for (const f of ['engine', 'rules', 'zip', 'matte', 'cutout', 'proof', 'catalog', 'app']) pro = pro.replace(`<script src="js/${f}.js"></script>`, () => `<script>\n${inline(`js/${f}.js`)}</script>`);
 pro = pro.replace('<body class="edition-free">', '<body class="edition-pro">');
+pro = pro.replace('<a class="brand" href="./"', '<a class="brand" href="#tool"'); // "./" from file:// opens a folder listing and loses work
 pro = pro.replace(/<title>[^<]*<\/title>/, '<title>PureFrame Pro</title>');
 if (/src="js\/|href="css\//.test(pro)) throw new Error('Pro build still references external files');
 write(path.join(DIST, 'pro', 'PureFrame Pro.html'), pro);
@@ -296,13 +297,14 @@ TIPS FOR BEST RESULTS
 - Content rules (no text, logos or props) still need your eye.
 
 UPDATES & SUPPORT
-12 months of rule updates are included: when marketplace rules change,
-download the new version from the same place you got this one. For help, reply to your
+Rule updates are free for at least 12 months: when marketplace rules
+change, download the new version from the same place you got this one. For help, reply to your
 purchase receipt email.
 
 LICENSE
-This copy is licensed to you for use in your own business (any number of
-your own devices). Please don't share or resell the file.
+This copy is licensed to one person or business, for your own products
+and for client work, on any number of your own devices. Please don't
+share or resell the files.
 `;
 write(path.join(DIST, 'pro', 'READ ME FIRST.txt'), readme);
 const licenses = ['README.md', 'LICENSE-onnxruntime-web.txt', 'LICENSE-U2Net-Apache-2.0.txt']

@@ -39,3 +39,16 @@ test('build can deflate entries (Node zlib) and stays readable', () => {
     'print(json.dumps([[i.filename, i.compress_type, len(z.read(i))] for i in z.infolist()]))', zipPath]).toString();
   assert.deepEqual(JSON.parse(out), [['big.txt', 8, text.length], ['tiny.bin', 0, 1]]);
 });
+
+test('buildBlob assembles a valid archive from Blobs with precomputed CRCs', async () => {
+  const datas = [Uint8Array.from([1, 2, 3, 4]), new TextEncoder().encode('évidence,csv\r\n'), new Uint8Array(5000).fill(9)];
+  const entries = datas.map((d, i) => ({ name: ['Amazon/a.jpg', 'evidence-report.csv', 'Amazon/a.jpg'][i], blob: new Blob([d]), crc: Z.crc32(d) }));
+  const blob = Z.buildBlob(entries, new Date(2026, 9, 15));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pfzip-'));
+  const zipPath = path.join(dir, 'out.zip');
+  fs.writeFileSync(zipPath, Buffer.from(await blob.arrayBuffer()));
+  const out = execFileSync('python3', ['-I', '-c',
+    'import sys, zipfile, json; z = zipfile.ZipFile(sys.argv[1]); assert z.testzip() is None; ' +
+    'print(json.dumps([[i.filename, len(z.read(i))] for i in z.infolist()]))', zipPath]).toString();
+  assert.deepEqual(JSON.parse(out), [['Amazon/a.jpg', 4], ['evidence-report.csv', datas[1].length], ['Amazon/a-2.jpg', 5000]]);
+});

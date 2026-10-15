@@ -101,5 +101,52 @@
     return out;
   }
 
-  return { build, crc32 };
+  /* Streaming variant for big batches: entries are [{ name, blob, crc }] with
+   * the CRC computed earlier, while each file's bytes were in memory anyway.
+   * The archive is assembled as a Blob of parts, so the photos are never copied
+   * into one giant array (stored, no compression; JPEGs don't shrink). */
+  function buildBlob(entries, now) {
+    const enc = new TextEncoder();
+    const { time, date } = dosDateTime(now || new Date());
+    const used = new Set(), parts = [], central = [];
+    let offset = 0;
+    for (const e of entries) {
+      const name = enc.encode(uniqueName(e.name, used)), size = e.blob.size;
+      const local = new DataView(new ArrayBuffer(30));
+      local.setUint32(0, 0x04034b50, true);
+      local.setUint16(4, 20, true);
+      local.setUint16(6, 0x0800, true);
+      local.setUint16(10, time, true);
+      local.setUint16(12, date, true);
+      local.setUint32(14, e.crc, true);
+      local.setUint32(18, size, true);
+      local.setUint32(22, size, true);
+      local.setUint16(26, name.length, true);
+      parts.push(local.buffer, name, e.blob);
+      const cd = new DataView(new ArrayBuffer(46));
+      cd.setUint32(0, 0x02014b50, true);
+      cd.setUint16(4, 20, true);
+      cd.setUint16(6, 20, true);
+      cd.setUint16(8, 0x0800, true);
+      cd.setUint16(12, time, true);
+      cd.setUint16(14, date, true);
+      cd.setUint32(16, e.crc, true);
+      cd.setUint32(20, size, true);
+      cd.setUint32(24, size, true);
+      cd.setUint16(28, name.length, true);
+      cd.setUint32(42, offset, true);
+      central.push(cd.buffer, name);
+      offset += 30 + name.length + size;
+    }
+    const cdSize = central.reduce((n, c) => n + c.byteLength, 0);
+    const end = new DataView(new ArrayBuffer(22));
+    end.setUint32(0, 0x06054b50, true);
+    end.setUint16(8, entries.length, true);
+    end.setUint16(10, entries.length, true);
+    end.setUint32(12, cdSize, true);
+    end.setUint32(16, offset, true);
+    return new Blob(parts.concat(central, [end.buffer]), { type: 'application/zip' });
+  }
+
+  return { build, buildBlob, crc32 };
 });
