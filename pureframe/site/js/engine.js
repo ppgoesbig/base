@@ -418,6 +418,21 @@
     return res;
   }
 
+  /* Snaps near-white pixels (every channel >= threshold) to exact white.
+   * Values of 250-254 are invisible against white, but they are exactly what
+   * a strict background checker counts as "off-white", e.g. the faint outer
+   * tail of a soft shadow. Returns how many pixels changed. */
+  function snapWhite(img, threshold) {
+    const t = threshold == null ? 250 : threshold, d = img.data;
+    let n = 0;
+    for (let p = 0; p < d.length; p += 4) {
+      if (d[p] >= t && d[p + 1] >= t && d[p + 2] >= t && (d[p] !== 255 || d[p + 1] !== 255 || d[p + 2] !== 255)) {
+        d[p] = d[p + 1] = d[p + 2] = 255; n++;
+      }
+    }
+    return n;
+  }
+
   /* Where to draw the product on the output canvas. With a bbox and a fill
    * target, the product's limiting side spans exactly `fill` of the canvas and
    * is centred. Without a bbox (or fill = 0) the whole image is fitted. */
@@ -529,6 +544,6 @@
 
   return {
     DETECT_TOLERANCE, ROUGH, createImage, composite, hasTransparency, backdropModel,
-    floodBackground, analyze, whiten, computeLayout, render, jpegInfo,
+    floodBackground, analyze, whiten, snapWhite, computeLayout, render, jpegInfo,
   };
 });

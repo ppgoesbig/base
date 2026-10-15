@@ -1,9 +1,11 @@
 # PureFrame launch playbook
 
 PureFrame is a free product photo checker for marketplace sellers, plus a paid
-offline **Pro** version. The free site attracts sellers through search ("amazon
-image requirements", "white background checker"...). Pro sells for a one-time
-$29 on Gumroad.
+offline **Pro** version. It checks every photo against 7 marketplaces at once,
+fixes what fails (including busy backgrounds, with on-device AI), and re-checks
+the saved file so the proof holds after compression. The free site attracts
+sellers through search ("amazon image requirements", "white background
+checker"...). Pro sells for a one-time $39 on Gumroad.
 
 There is no server, database or monthly bill. GitHub Pages hosts the site for
 free, Gumroad handles payments and delivery, and every image is processed in
@@ -17,8 +19,8 @@ Setup takes about 30–45 minutes, once.
 
 1. Sign up at <https://gumroad.com> and connect your payout method.
 2. **New product → Digital product**:
-   - **Name:** `PureFrame Pro: Marketplace Product Photo Fixer`
-   - **Price:** `$29`
+   - **Name:** `PureFrame Pro: Prove Your Product Photos Pass`
+   - **Price:** `$39`
    - **Custom URL:** `pureframe-pro`
 3. **Content:** upload `PureFrame-Pro.zip`. To rebuild it, run
    `node pureframe/scripts/build.mjs`; it lands in `pureframe/dist/`.
@@ -32,7 +34,7 @@ Setup takes about 30–45 minutes, once.
 
 Gumroad has been merchant of record since January 2025, so it collects and
 remits sales tax / VAT for you. You still report payouts as income. Fees: 10% +
-$0.50 per direct sale, about $25.60 kept from each $29 sale; 30% on sales that
+$0.50 per direct sale, about $34.60 kept from each $39 sale; 30% on sales that
 come through Gumroad's Discover marketplace. Lemon Squeezy (also merchant of
 record) and Payhip work the same way; just upload the same ZIP.
 
@@ -42,10 +44,10 @@ Edit `pureframe/site/js/config.js`:
 
 ```js
 proUrl: 'https://yourname.gumroad.com/l/pureframe-pro',  // your real link
-price: '$29',
+price: '$39',
 ```
 
-If you change the price, also update the `"price": "29"` offer in the JSON-LD
+If you change the price, also update the `"price": "39"` offer in the JSON-LD
 block of `pureframe/site/index.html`.
 
 Commit and push.
@@ -121,9 +123,12 @@ News, Reddit, short videos and Pinterest are in
 
 ### Pricing ideas once sales come in
 
-- Raise to $39 after the first 10–20 reviews.
-- Add an **Agency** variant at $79 (Gumroad *versions*) for studios that
-  edit for clients.
+- Raise to $49 after the first 10–20 reviews.
+- Add a **Studio** variant at $149 (Gumroad *versions*) for agencies and
+  virtual assistants who prepare images for several sellers: same app,
+  licensed for client work.
+- After the 12 months of included rule updates, sell an optional $19
+  "rules update" for the following year.
 - Bundle: "Pro + 10-minute product photo lighting guide" if you want to sell
   your expertise.
 
@@ -131,41 +136,58 @@ News, Reddit, short videos and Pinterest are in
 
 This is a real product in a real niche, not a guarantee. A small tool like
 this typically converts 1–3% of active users to paid. For illustration only:
-2,000 monthly tool users × 2% × $29 ≈ **$1,160/month**. Getting to 2,000
+2,000 monthly tool users × 2% × $39 ≈ **$1,560/month**. Getting to 2,000
 users usually takes months of search growth and some of the pushes above.
 Expect a slow start. The cost of running it stays at $0 (or about $10/year
 with a domain), so time works in your favor.
 
 ## 6. Gumroad product description
 
-> **Stop getting product photos rejected.**
+> **Prove your product photos pass before the marketplace checks them.**
 >
-> PureFrame Pro checks and fixes your product photos for **Amazon, Walmart,
-> TikTok Shop, eBay, Etsy, Shopify and Google Shopping** in one click:
+> PureFrame Pro checks, fixes and verifies product photos for **Amazon,
+> Walmart, TikTok Shop, eBay, Etsy, Shopify and Google Shopping**, on your own
+> computer.
 >
-> - **Pure #FFFFFF background.** Grey and off-white studio backdrops become
->   exact white, with soft shadows kept natural and white products kept
->   detailed.
-> - **Perfect framing.** The product is recentred and scaled to fill 85%+
->   of the frame.
-> - **Right size and format.** Exports at each marketplace's recommended size
->   (2000 × 2000 for Amazon, 2200 × 2200 for Walmart...) as sRGB JPEG under
->   the file-size limit.
-> - **Verified.** Every exported photo is re-checked against the rules, so
->   you know it passes before you upload.
-> - **Whole folders at once,** downloaded as one ZIP.
-> - **Bulk rename** for upload: `B0C1234567.MAIN.jpg`, `.PT01`...
-> - **Private and offline.** It's a single app file that runs in your browser
->   on Mac, Windows or Linux. Your photos never leave your computer.
+> - **Every marketplace at once.** Each photo shows a verdict for all 7. One
+>   click turns your batch into correctly sized files for every marketplace
+>   you pick, in a folder per marketplace (ZIP, or saved straight to a folder
+>   in Chrome and Edge).
+> - **Any background.** Studio backdrops become exact #FFFFFF with natural
+>   shadows and white products kept detailed. Phone photos on tables, desks
+>   or floors are cut out by AI that runs on your device.
+> - **Proof after compression.** PureFrame opens the file it saved and
+>   measures every background pixel more than 8 px from the product. Where a
+>   white background is required or recommended, it raises the quality or
+>   saves a PNG until the numbers are clean.
+> - **Evidence report.** You get a CSV and a printable page with the measured
+>   values for every file: useful for clients, VAs and your own records.
+> - **Names from your spreadsheet.** `ASIN.MAIN.jpg`, `ASIN.PT01.jpg`... for
+>   Amazon, GTINs for Walmart, SKUs everywhere else.
+> - **Private and offline.** No uploads, no account, no subscription.
 >
-> One-time payment, free updates when marketplace rules change, 30-day
-> money-back guarantee.
+> One-time payment, 12 months of rule updates included, 30-day money-back
+> guarantee. Try the free version first: **[your site URL]**
 >
-> Try the free version first: **[your site URL]**
->
-> *Works best with studio shots on a plain backdrop. For busy or lifestyle
-> backgrounds, remove the background first, then run the photo through
-> PureFrame.*
+> *Measurements are against each marketplace's published rules. Content rules
+> (no text, logos or props) still need your eye.*
+
+## Positioning: what makes PureFrame different
+
+Research in October 2026 found real competitors, so lead with what they don't
+combine:
+
+- **Free browser tools** check and export for several marketplaces, some
+  with AI cutouts.
+- **Desktop tools** sell a similar audit-and-export workflow for about $30–50
+  one-time.
+- **Cloud tools** charge monthly and upload your photos.
+
+None we found re-checks the *saved* file after compression, covers Google
+Shopping's 2027 size rule, and names files from a product spreadsheet, all
+on-device. Lead with **"proof, not promises"**. If the "built by a product
+photographer" story is true for you, use it: it's the one thing a clone
+can't copy.
 
 ## 7. Keeping it running (about 1 hour per quarter)
 

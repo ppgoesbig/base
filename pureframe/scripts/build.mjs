@@ -233,7 +233,7 @@ let pro = stripFree(read('index.html'));
 const inline = (file) => read(file).replace(/<\/script/gi, '<\\/script');
 pro = pro.replace('<link rel="stylesheet" href="css/styles.css">', () => `<style>\n${read('css/styles.css')}</style>`);
 pro = pro.replace('<script src="js/config.js"></script>', () => `<script>window.PF_CONFIG = { edition: 'pro', proUrl: '', price: '', freeFixLimit: Infinity, goatcounter: '', aiAssets: 'script', aiScript: 'PureFrame AI.js' };</script>`);
-for (const f of ['engine', 'rules', 'zip', 'matte', 'cutout', 'app']) pro = pro.replace(`<script src="js/${f}.js"></script>`, () => `<script>\n${inline(`js/${f}.js`)}</script>`);
+for (const f of ['engine', 'rules', 'zip', 'matte', 'cutout', 'proof', 'catalog', 'app']) pro = pro.replace(`<script src="js/${f}.js"></script>`, () => `<script>\n${inline(`js/${f}.js`)}</script>`);
 pro = pro.replace('<body class="edition-free">', '<body class="edition-pro">');
 pro = pro.replace(/<title>[^<]*<\/title>/, '<title>PureFrame Pro</title>');
 if (/src="js\/|href="css\//.test(pro)) throw new Error('Pro build still references external files');
@@ -257,8 +257,10 @@ GETTING STARTED
    files together: "PureFrame AI.js" powers the AI background removal.
 2. Double-click "PureFrame Pro.html". It opens in your web browser
    (Chrome, Edge, Safari or Firefox) on Mac, Windows or Linux.
-3. Choose your marketplace, drop in your photos, then click "Fix all"
-   and "Download all (.zip)".
+3. Drop in your photos. Each one shows a verdict for all 7 marketplaces.
+   Click "Fix all" for one marketplace, or "Export for marketplaces" to
+   get every photo for every marketplace you pick, in folders, with an
+   evidence report.
 
 Tip: bookmark the file in your browser, or keep it in your Dock or
 taskbar, so it's one click away.
@@ -268,9 +270,19 @@ WHAT'S INCLUDED
   eBay, Etsy, Shopify and Google Shopping.
 - On-device AI background removal for photos shot anywhere (kitchen
   table, desk, outdoors). Runs offline; nothing is uploaded.
-- ZIP download of the whole batch.
-- Bulk renaming for upload, e.g. {name}.MAIN -> B0C1234567.MAIN.jpg
-  (Fix settings > Output > File names).
+- One photo -> every marketplace: correctly sized files sorted into a
+  folder per marketplace, as a ZIP or saved straight to a folder
+  (Chrome and Edge).
+- Proof after compression: every saved file is decoded and re-checked;
+  wherever a white background is required or recommended, the background
+  more than 8 px from the product is exactly #FFFFFF.
+- Evidence report for each file: evidence-report.csv and a printable
+  evidence-report.html with the measured numbers.
+- Names from your product spreadsheet: in the export window choose
+  "Name files from a spreadsheet" and pick a CSV with a File or SKU
+  column plus ASIN / UPC / EAN / GTIN. Amazon files become
+  ASIN.MAIN.jpg, ASIN.PT01.jpg...; Walmart files use the GTIN.
+  Without a spreadsheet: Fix settings > Output > File names.
 - Custom output size, product fill, format and JPEG quality.
 - Works fully offline. Your photos never leave your computer.
 
@@ -284,8 +296,8 @@ TIPS FOR BEST RESULTS
 - Content rules (no text, logos or props) still need your eye.
 
 UPDATES & SUPPORT
-Updates are free: when marketplace rules change, you'll get the new file
-from the same place you downloaded this one. For help, reply to your
+12 months of rule updates are included: when marketplace rules change,
+download the new version from the same place you got this one. For help, reply to your
 purchase receipt email.
 
 LICENSE

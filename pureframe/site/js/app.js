@@ -3,7 +3,7 @@
 (function () {
   'use strict';
   const E = window.PFEngine, R = window.PFRules, Z = window.PFZip, Mt = window.PFMatte;
-  const CFG = Object.assign({ edition: 'free', proUrl: '#pricing', price: '$29', freeFixLimit: 3, goatcounter: '' }, window.PF_CONFIG);
+  const CFG = Object.assign({ edition: 'free', proUrl: '#pricing', price: '$39', freeFixLimit: 3, goatcounter: '' }, window.PF_CONFIG);
   const PRO = CFG.edition === 'pro';
   const WORK_MAX = 4000; // longest side we process at; bounds memory and time
   const THUMB_MAX = 480;
@@ -14,14 +14,25 @@
     set(k, v) { try { localStorage.setItem('pf.' + k, JSON.stringify(v)); } catch (e) { /* storage blocked */ } },
   };
 
+  // Free fixes are counted per day and per photo (re-fixing the same photo is
+  // free), and survive reloads.
+  const today = () => { const d = new Date(); return `${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()}`; };
+  function loadQuota() {
+    const q = store.get('quota');
+    return new Set(q && q.day === today() && Array.isArray(q.ids) ? q.ids : []);
+  }
+  const saveQuota = () => store.set('quota', { day: today(), ids: Array.from(state.fixedIds) });
+  const signature = (item) => `${item.file.name}|${item.file.size}|${item.file.lastModified || 0}`;
+
   const params = new URLSearchParams(location.search);
   const state = {
     preset: R.preset(params.get('preset') || store.get('preset') || 'amazon'),
     settings: Object.assign({ tolerance: 14, levels: true, reframe: true, cutout: 'auto', shadow: false }, store.get('settings')),
     out: null,
     items: [],
-    fixedIds: new Set(),
+    fixedIds: loadQuota(),
     busy: false,
+    catalog: null,
   };
   let nextId = 1;
 
@@ -163,7 +174,7 @@
     if (state.items.includes(item)) { renderItem(item); renderSummary(); }
   }
 
-  const canFix = (item) => PRO || state.fixedIds.has(item.id) || state.fixedIds.size < CFG.freeFixLimit;
+  const canFix = (item) => PRO || state.fixedIds.has(signature(item)) || state.fixedIds.size < CFG.freeFixLimit;
   const isStale = (item) => item.fixed && item.fixed.key !== fixKey();
 
   const AI_MAX = 2400;     // working size for AI cut-outs
@@ -221,24 +232,73 @@
     }
   }
 
+  const PROOF_MARGIN = 8;     // px from the product beyond which the background must stay exactly white
+  const PROOF_MAX_PX = 25e6;  // skip the pixel proof on huge custom sizes (memory)
+
+  /* Encodes the canvas, decodes the saved bytes again and checks the result.
+   * Wherever a white background is required or recommended, JPEG quality steps
+   * up (then PNG, where accepted) until every background pixel more than
+   * PROOF_MARGIN px from the product is exactly #FFFFFF in the saved file.
+   * Keeps the cleanest candidate that fits the size limit. */
+  async function proofEncode(canvas, rendered, out, preset) {
+    const strictWanted = preset.background !== 'any' && !!window.PFProof && rendered.width * rendered.height <= PROOF_MAX_PX;
+    const pngOK = preset.formats.includes('image/png');
+    const plan = out.type === 'image/png' ? [['image/png']]
+      : strictWanted ? [['image/jpeg', out.quality], ...[0.98, 1].filter((q) => q > out.quality).map((q) => ['image/jpeg', q]), ...(pngOK ? [['image/png']] : [])]
+      : [['image/jpeg', out.quality]];
+    let best = null, attempts = 0;
+    for (const [type, q] of plan) {
+      attempts++;
+      let blob = type === 'image/png' ? await toBlob(canvas, 'image/png') : await toBlob(canvas, 'image/jpeg', q);
+      let quality = q;
+      if (out.maxBytes && blob.size > out.maxBytes) {
+        if (best) continue; // a cleaner candidate that's too big doesn't help
+        if (type === 'image/jpeg') {
+          blob = await encode(canvas, Object.assign({}, out, { type: 'image/jpeg' })); // fit the limit first
+          quality = null;
+        }
+        // An oversized PNG with nothing better is kept; the size note explains.
+      }
+      const src = await decode(blob);
+      const decoded = toImageData(src, Infinity);
+      release(src);
+      const strict = window.PFProof && decoded.width === rendered.width && decoded.height === rendered.height && rendered.width * rendered.height <= PROOF_MAX_PX
+        ? window.PFProof.strictBackground(rendered, decoded, { margin: PROOF_MARGIN }) : null;
+      const cand = { blob, decoded, strict, type, encoder: type === 'image/png' ? 'PNG' : quality ? `JPEG q${Math.round(quality * 100)}` : 'JPEG (size-limited)' };
+      if (!best || (strict && best.strict && strict.nonWhite < best.strict.nonWhite)) best = cand;
+      if (!strictWanted || (strict && strict.nonWhite === 0)) break;
+      await frame();
+    }
+    return Object.assign(best, { attempts });
+  }
+
   // Lays out, renders, encodes and re-verifies one export of a prepared photo.
-  async function exportPhoto(item, prep, preset, out) {
+  // nameFor(ext) can supply the file name (spreadsheet naming); otherwise the template is used.
+  async function exportPhoto(item, prep, preset, out, nameFor) {
     const reframe = state.settings.reframe && prep.bbox;
     const layout = E.computeLayout(reframe ? prep.bbox : null, prep.img.width, prep.img.height, out.width, out.height, reframe ? out.fill : 0);
     const img = E.render(prep.img, layout, out.width, out.height);
+    if (!prep.skipped) E.snapWhite(img, 250);
     await frame();
     const canvas = document.createElement('canvas');
     canvas.width = out.width; canvas.height = out.height;
     canvas.getContext('2d').putImageData(new ImageData(img.data, out.width, out.height), 0, 0);
-    const blob = await encode(canvas, out);
+    const proof = await proofEncode(canvas, img, out, preset);
+    const blob = proof.blob;
 
-    // Re-check the exported file exactly as an uploaded photo would be.
-    const vsrc = await decode(blob);
-    const verify = E.analyze(toImageData(vsrc, WORK_MAX));
-    release(vsrc);
-    const ext = out.type === 'image/png' ? '.png' : '.jpg';
-    const name = R.fileName(out.naming, { name: item.stem, index: state.items.indexOf(item) + 1, preset: preset.id, width: out.width, height: out.height }, ext);
-    const report = R.evaluate(verify, { name, type: out.type, size: blob.size, width: out.width, height: out.height, jpeg: null }, preset);
+    // Grade the saved file exactly as an uploaded photo would be.
+    const verify = E.analyze(proof.decoded);
+    const ext = proof.type === 'image/png' ? '.png' : '.jpg';
+    const name = (nameFor && nameFor(ext)) || R.fileName(out.naming, { name: item.stem, index: state.items.indexOf(item) + 1, preset: preset.id, width: out.width, height: out.height }, ext);
+    const report = R.evaluate(verify, { name, type: proof.type, size: blob.size, width: out.width, height: out.height, jpeg: null }, preset);
+    if (proof.strict && proof.strict.checked) {
+      const st = proof.strict;
+      report.checks.push(st.nonWhite === 0
+        ? { id: 'compression', status: 'pass', label: 'Stays #FFFFFF after compression',
+          detail: `Every background pixel more than ${PROOF_MARGIN} px from the product and its shadow is exactly white in the saved file (${proof.encoder}).` }
+        : { id: 'compression', status: preset.background === 'any' ? 'info' : 'warn', label: 'Off-white pixels after compression',
+          detail: `${st.nonWhite.toLocaleString('en-US')} background pixels (darkest ${st.darkest}) aren't exactly white in the saved file. A higher quality or PNG avoids this.` });
+    }
 
     const notes = [];
     if (prep.aiError) notes.push(prep.aiError);
@@ -258,7 +318,12 @@
     }
     report.status = report.checks.reduce((s, c) => ((STATUS_RANK[c.status] || 0) > STATUS_RANK[s] ? c.status : s), 'pass');
     if (out.maxBytes && blob.size > out.maxBytes) notes.push(`Couldn't get the file under ${R.fmtBytes(out.maxBytes)}. Try JPEG or a smaller size.`);
-    return { blob, name, report, notes, width: out.width, height: out.height, preset: preset.id };
+    if (proof.type === 'image/png' && out.type !== 'image/png') notes.push('Saved as PNG: it was the only way to keep every background pixel exactly white within the size limit.');
+    const evidence = window.PFProof ? window.PFProof.evidence({
+      file: { name, size: blob.size, type: proof.type, width: out.width, height: out.height },
+      marketplace: preset.name, preset, report, analysis: verify, strict: proof.strict, attempts: proof.attempts, encoder: proof.encoder,
+    }) : null;
+    return { blob, name, report, notes, evidence, width: out.width, height: out.height, preset: preset.id };
   }
 
   async function fix(item) {
@@ -277,11 +342,14 @@
       const out = outputSpec(), key = fixKey();
       const prep = await prepare(item, setStage);
       setStage('Exporting and re-checking…');
-      const result = await exportPhoto(item, prep, state.preset, out);
+      const entries = catalogEntries(state.items.filter((i) => i.status !== 'error'));
+      const entry = entries && entries.get(item.id);
+      const nameFor = entry && entry.record ? (ext) => window.PFCatalog.name(entry, state.preset.id, ext).name : null;
+      const result = await exportPhoto(item, prep, state.preset, out, nameFor);
       if (item.fixed) URL.revokeObjectURL(item.fixed.url);
       item.fixed = Object.assign(result, { url: URL.createObjectURL(result.blob), key, ai: prep.ai });
       item.showBefore = false;
-      state.fixedIds.add(item.id);
+      if (!PRO) { state.fixedIds.add(signature(item)); saveQuota(); }
       track(prep.ai ? 'fix-ai' : 'fix');
     } catch (err) {
       item.fixError = err.message || String(err);
@@ -300,23 +368,164 @@
     return true;
   }
 
+  // ---------- free audit report: every photo x every marketplace ----------
+  function auditReport() {
+    if (!window.PFProof) return;
+    const records = [];
+    for (const item of state.items) {
+      if (!item.analysis) continue;
+      for (const p of R.PRESETS) {
+        const report = R.evaluate(item.analysis, item.info, p);
+        records.push(window.PFProof.evidence({
+          file: { name: item.file.name, size: item.info.size, type: item.info.type, width: item.info.width, height: item.info.height },
+          marketplace: p.name, preset: p, report, analysis: item.analysis, strict: null, attempts: 0, encoder: 'original (not fixed)',
+        }));
+      }
+    }
+    if (!records.length) return;
+    const date = new Date().toISOString().slice(0, 10);
+    download(new Blob(['\ufeff' + window.PFProof.toCSV(records)], { type: 'text/csv;charset=utf-8' }), `pureframe-audit-${date}.csv`);
+    track('audit-csv');
+  }
+
+  // ---------- multi-marketplace export (Pro) ----------
+  const folderName = (p) => p.name.replace(/[\\/:*?"<>|]+/g, '-');
+  const outFor = (p) => (PRO && state.out && p.id === state.preset.id ? outputSpec() : defaultOut(p));
+
   async function zipAll() {
     if (!PRO) { upsell('zip'); return; }
-    const btn = $('zipAll');
-    btn.disabled = true;
+    openExport();
+  }
+
+  function openExport() {
+    const box = $('exportTargets');
+    const chosen = new Set(store.get('targets') || [state.preset.id]);
+    box.querySelectorAll('label').forEach((l) => l.remove());
+    for (const p of R.PRESETS) {
+      const l = document.createElement('label');
+      l.className = 'check';
+      l.innerHTML = `<input type="checkbox" value="${p.id}" ${chosen.has(p.id) ? 'checked' : ''}> ${esc(p.label)}`;
+      box.appendChild(l);
+    }
+    $('exportFolder').hidden = !('showDirectoryPicker' in window);
+    $('exportProgress').textContent = '';
+    renderCatalog();
+    $('exportDlg').showModal();
+  }
+
+  const exportTargets = () => Array.from(document.querySelectorAll('#exportTargets input:checked')).map((i) => R.preset(i.value));
+
+  // Spreadsheet naming: maps photo -> per-marketplace names (or problems).
+  function catalogEntries(items) {
+    if (!PRO || !state.catalog || !window.PFCatalog) return null;
+    const entries = window.PFCatalog.match(items.map((i) => i.file.name), state.catalog.index);
+    return new Map(items.map((it, k) => [it.id, entries[k]]));
+  }
+
+  async function writeToFolder(dir, path, blob) {
+    const parts = path.split('/');
+    let d = dir;
+    for (const part of parts.slice(0, -1)) d = await d.getDirectoryHandle(part, { create: true });
+    const fh = await d.getFileHandle(parts[parts.length - 1], { create: true });
+    const w = await fh.createWritable();
+    await w.write(blob);
+    await w.close();
+  }
+
+  async function runExport(toFolder) {
+    const targets = exportTargets(), progress = (t) => { $('exportProgress').textContent = t; };
+    if (!targets.length) { progress('Pick at least one marketplace.'); return; }
+    store.set('targets', targets.map((p) => p.id));
+    let dir = null;
+    if (toFolder) {
+      try {
+        dir = await window.showDirectoryPicker({ mode: 'readwrite', id: 'pureframe-export' });
+      } catch (e) {
+        if (e && e.name !== 'AbortError') progress(`Couldn't open that folder: ${e.message || e}`);
+        return;
+      }
+    }
+    const buttons = [$('exportZip'), $('exportFolder')];
+    buttons.forEach((b) => { b.disabled = true; });
     try {
       await runQueue();
-      await fixAll();
-      const done = state.items.filter((i) => i.fixed && !isStale(i));
-      if (!done.length) return;
-      const files = [];
-      for (const i of done) files.push({ name: i.fixed.name, data: new Uint8Array(await i.fixed.blob.arrayBuffer()) });
-      const date = new Date().toISOString().slice(0, 10);
-      download(new Blob([Z.build(files)], { type: 'application/zip' }), `pureframe-${state.preset.id}-${date}.zip`);
-      track('zip');
+      const items = state.items.filter((i) => i.status === 'ready');
+      if (!items.length) { progress('Add some photos first.'); return; }
+      const multi = targets.length > 1, entries = catalogEntries(items);
+      const zipFiles = [], records = [], used = new Set();
+      const unique = (path) => {
+        let p = path, n = 2;
+        const dot = path.lastIndexOf('.');
+        while (used.has(p.toLowerCase())) p = `${path.slice(0, dot)}-${n++}${path.slice(dot)}`;
+        used.add(p.toLowerCase());
+        return p;
+      };
+      let done = 0;
+      for (let k = 0; k < items.length; k++) {
+        const item = items[k], label = `Photo ${k + 1} of ${items.length}`;
+        const prep = await prepare(item, (t) => progress(`${label}: ${t}`));
+        for (const p of targets) {
+          progress(`${label}: exporting for ${p.name}…`);
+          const entry = entries && entries.get(item.id);
+          const nameFor = entry && entry.record ? (ext) => window.PFCatalog.name(entry, p.id, ext).name : null;
+          const res = await exportPhoto(item, prep, p, outFor(p), nameFor);
+          const path = unique((multi ? `${folderName(p)}/` : '') + res.name);
+          if (dir) await writeToFolder(dir, path, res.blob);
+          else zipFiles.push({ name: path, data: new Uint8Array(await res.blob.arrayBuffer()) });
+          if (res.evidence) records.push(Object.assign(res.evidence, { file: path, source: item.file.name }));
+          done++;
+        }
+      }
+      if ($('exportReport').checked && records.length && window.PFProof) {
+        const stamp = new Date().toLocaleString();
+        // A UTF-8 byte order mark makes Excel on Windows read non-English names correctly.
+        const csv = new Blob(['\ufeff' + window.PFProof.toCSV(records)], { type: 'text/csv;charset=utf-8' });
+        const html = new Blob([window.PFProof.reportHTML(records, { title: 'PureFrame evidence report', generatedAt: stamp, product: 'PureFrame Pro' })], { type: 'text/html' });
+        if (dir) { await writeToFolder(dir, 'evidence-report.csv', csv); await writeToFolder(dir, 'evidence-report.html', html); }
+        else {
+          zipFiles.push({ name: 'evidence-report.csv', data: new Uint8Array(await csv.arrayBuffer()) });
+          zipFiles.push({ name: 'evidence-report.html', data: new Uint8Array(await html.arrayBuffer()) });
+        }
+      }
+      if (!dir) {
+        const date = new Date().toISOString().slice(0, 10);
+        const label = multi ? 'marketplaces' : targets[0].id;
+        download(new Blob([Z.build(zipFiles)], { type: 'application/zip' }), `pureframe-${label}-${date}.zip`);
+      }
+      const failed = records.filter((r) => r.status === 'fail').length;
+      progress(`Done: ${done} file${done === 1 ? '' : 's'} for ${targets.length} marketplace${targets.length === 1 ? '' : 's'}${dir ? ', saved to the folder you chose' : ''}.${failed ? ` ${failed} still fail a check; see the evidence report.` : ' Every file passed the measurable checks.'}`);
+      track('export');
+    } catch (err) {
+      progress(`Export stopped: ${err.message || err}`);
     } finally {
-      btn.disabled = false;
+      buttons.forEach((b) => { b.disabled = false; });
     }
+  }
+
+  // ---------- spreadsheet (catalog) naming ----------
+  async function loadCatalog(file) {
+    const C = window.PFCatalog;
+    const text = await file.text();
+    const { headers, rows } = C.parseCSV(text);
+    const cols = C.columns(headers);
+    if (!rows.length) throw new Error('That file has no rows.');
+    if (!cols.file && !cols.sku) throw new Error('Add a column named "File" or "SKU" so photos can be matched to rows.');
+    state.catalog = { name: file.name, rows: rows.length, cols, index: C.buildIndex(rows, cols) };
+  }
+
+  function renderCatalog() {
+    const status = $('catalogStatus'), box = $('catalogPreview');
+    $('catalogClear').hidden = !state.catalog;
+    if (!state.catalog || !window.PFCatalog) { box.hidden = true; return; }
+    const items = state.items.filter((i) => i.status !== 'error');
+    const targets = exportTargets().map((p) => p.id);
+    const rows = window.PFCatalog.preview(items.map((i) => i.file.name), state.catalog.index, targets.length ? targets : [state.preset.id], '.jpg');
+    const matched = new Set(rows.filter((r) => r.name).map((r) => r.file)).size;
+    status.textContent = `Using ${state.catalog.name}: ${state.catalog.rows} rows, ${matched} of ${items.length} photos matched. Unmatched photos keep their usual names.`;
+    const shown = rows.slice(0, 40);
+    box.hidden = !rows.length;
+    box.innerHTML = `<table><thead><tr><th>Photo</th><th>Marketplace</th><th>New name</th></tr></thead><tbody>${shown.map((r) =>
+      `<tr class="${r.problem ? 'row-problem' : ''}"><td>${esc(r.file)}</td><td>${esc(R.preset(r.marketplace).name)}</td><td>${r.name ? `<code>${esc(r.name)}</code>` : ''}${r.problem ? `<span class="problem">${esc(r.problem)}</span>` : ''}</td></tr>`).join('')}</tbody></table>${rows.length > shown.length ? `<p class="hint">…and ${rows.length - shown.length} more.</p>` : ''}`;
   }
 
   function remove(item) {
@@ -332,8 +541,8 @@
   function upsell(reason) {
     if (PRO) return;
     const text = {
-      limit: `You've used the ${CFG.freeFixLimit} free fixes for this visit. Pro fixes every photo in one click, with no limit.`,
-      zip: 'Downloading the whole batch as a ZIP is part of Pro.',
+      limit: `You've used today's ${CFG.freeFixLimit} free fixes. Pro fixes every photo, for every marketplace, with no limit.`,
+      zip: 'Exporting a whole batch for every marketplace at once, with evidence reports and spreadsheet naming, is part of Pro.',
       settings: 'Custom output size, fill, format, quality and file names are part of Pro.',
     }[reason];
     $('upsellReason').textContent = text;
@@ -392,10 +601,17 @@
       '<button class="btn btn-small btn-ghost" data-action="remove" aria-label="Remove photo">Remove</button>',
     ].join('');
 
+    const matrix = after ? '' : `<div class="matrix" role="group" aria-label="Every marketplace">${R.PRESETS.map((p) => {
+      const r = R.evaluate(item.analysis, item.info, p);
+      const issues = r.checks.filter((c) => c.status === 'fail' || c.status === 'warn').map((c) => c.label);
+      return `<button type="button" class="mx mx-${r.status}${p.id === state.preset.id ? ' mx-current' : ''}" data-action="preset" data-preset="${p.id}" title="${esc(`${p.name}: ${issues.length ? issues.join(', ') : 'passes every check'}`)}">${ICONS[r.status]}<span>${esc(p.name)}</span></button>`;
+    }).join('')}</div>`;
+
     return `<button class="thumb${after ? ' thumb-after' : item.analysis.transparent ? ' thumb-alpha' : ''}" data-action="view" aria-label="Preview ${esc(item.file.name)}"><img src="${imgSrc}" alt="">${after ? '<span class="thumb-tag">After</span>' : fixed ? '<span class="thumb-tag thumb-tag-before">Before</span>' : ''}${fixing ? '<span class="thumb-busy"></span>' : ''}</button>
       <div class="card-body">
         <div class="card-head"><p class="card-name" title="${esc(item.file.name)}">${esc(item.file.name)}</p><span class="pill pill-${report.status}">${pill}</span></div>
         <p class="meta">${meta}</p>
+        ${matrix}
         <ul class="checks">${rows}</ul>
         ${notes}
         <div class="card-actions">${actions}</div>
@@ -436,7 +652,7 @@
     if (!PRO && items.length) {
       const left = Math.max(0, CFG.freeFixLimit - state.fixedIds.size);
       quota.hidden = false;
-      quota.innerHTML = `Free version: <strong>${left} of ${CFG.freeFixLimit}</strong> auto-fixes left this visit. <a href="${esc(CFG.proUrl)}" data-pro-link>Pro</a> fixes unlimited photos and downloads them as one ZIP.`;
+      quota.innerHTML = `Free version: <strong>${left} of ${CFG.freeFixLimit}</strong> fixes left today. Checks are unlimited. <a href="${esc(CFG.proUrl)}" data-pro-link>Pro</a> fixes every photo for every marketplace in one go.`;
     } else quota.hidden = true;
   }
 
@@ -485,8 +701,9 @@
       const clamp = (v, lo, hi, d) => (Number.isFinite(v) ? Math.min(hi, Math.max(lo, Math.round(v))) : d);
       const d = defaultOut(state.preset);
       state.out = {
-        width: clamp(+$('outW').value, 100, 10000, d.width),
-        height: clamp(+$('outH').value, 100, 10000, d.height),
+        // 4096 px keeps every canvas under Safari's ~16.7 megapixel limit.
+        width: clamp(+$('outW').value, 100, 4096, d.width),
+        height: clamp(+$('outH').value, 100, 4096, d.height),
         fill: clamp(+$('fill').value, 60, 98, Math.round(d.fill * 100)) / 100,
         type: $('outType').value,
         quality: clamp(+$('quality').value, 60, 100, 92) / 100,
@@ -593,6 +810,7 @@
       else if (action === 'download') { download(item.fixed.blob, item.fixed.name); track('download'); }
       else if (action === 'toggle') { item.showBefore = !item.showBefore; renderItem(item); renderSummary(); }
       else if (action === 'view') openViewer(item);
+      else if (action === 'preset') { $('preset').value = btn.dataset.preset; setPreset(btn.dataset.preset); }
     });
 
     $('fixAll').addEventListener('click', async (e) => {
@@ -600,6 +818,18 @@
       try { await runQueue(); await fixAll(); } finally { $('fixAll').disabled = false; }
     });
     $('zipAll').addEventListener('click', zipAll);
+    $('auditCsv').addEventListener('click', auditReport);
+    $('exportZip').addEventListener('click', () => runExport(false));
+    $('exportFolder').addEventListener('click', () => runExport(true));
+    $('exportTargets').addEventListener('change', renderCatalog);
+    $('catalogBtn').addEventListener('click', () => $('catalogInput').click());
+    $('catalogClear').addEventListener('click', () => { state.catalog = null; renderCatalog(); $('catalogStatus').textContent = 'Spreadsheet removed. Photos keep their usual names.'; });
+    $('catalogInput').addEventListener('change', async () => {
+      const f = $('catalogInput').files[0];
+      $('catalogInput').value = '';
+      if (!f) return;
+      try { await loadCatalog(f); renderCatalog(); } catch (err) { state.catalog = null; renderCatalog(); $('catalogStatus').textContent = err.message || String(err); }
+    });
     $('clearAll').addEventListener('click', () => { for (const i of state.items.slice()) remove(i); });
     $('viewerToggle').addEventListener('click', () => { viewing.viewBefore = !viewing.viewBefore; updateViewer(); });
     $('viewer').addEventListener('close', () => { if (viewerOriginal) { URL.revokeObjectURL(viewerOriginal); viewerOriginal = null; } });

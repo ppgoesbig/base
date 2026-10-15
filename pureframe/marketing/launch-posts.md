@@ -10,28 +10,30 @@ answer comments, and follow each community's self-promotion rules.
 
 **Name:** PureFrame
 
-**Tagline (60 chars max):** Product photos that pass Amazon's image check, in 1 click
+**Tagline (60 chars max):** Prove your product photos pass every marketplace check
 
 **Description:**
-> Check product photos against Amazon, Walmart, TikTok Shop, eBay, Etsy,
-> Shopify and Google Shopping image rules, then fix them in one click: pure
-> #FFFFFF background, product filling 85%+ of the frame, right size and format.
-> Everything runs in your browser, so photos are never uploaded. Free checks;
-> Pro ($29 once) fixes whole folders, exports a ZIP and renames files for bulk
-> upload.
+> See how every product photo scores against Amazon, Walmart, TikTok Shop,
+> eBay, Etsy, Shopify and Google Shopping at once. Fix what fails, including
+> busy backgrounds, with AI that runs on your device. PureFrame then re-checks
+> the saved file, so the background is still exactly #FFFFFF after JPEG
+> compression. Nothing is uploaded. Free checks; Pro ($39 once) exports
+> every photo for every marketplace, with spreadsheet naming and an evidence
+> report.
 
 **First comment (maker):**
-> Hi Product Hunt! I built PureFrame after watching main images get flagged
-> over things you can't see: a "white" backdrop that's really RGB 240, or a
-> product filling 70% of the frame instead of 85%.
+> Hi Product Hunt! Main images get flagged for things you can't see: a
+> "white" backdrop that's really RGB 240, a product filling 70% of the
+> frame, or JPEG compression turning pixels next to the product 252 instead
+> of 255.
 >
-> PureFrame measures exactly what the marketplaces measure and fixes it in one
-> click. It keeps soft shadows natural and doesn't blow out white products.
-> Each export is re-checked before you download it. It all runs locally in
-> your browser, so it's fast and private.
+> PureFrame measures what the marketplaces measure, fixes it, then opens the
+> file it saved and measures again. You get the numbers, not a promise. The
+> AI cutout, the checks and the exports all run in your browser, so
+> unreleased products stay private.
 >
-> Checking is free forever. Today only, code `LAUNCH10` takes $10 off Pro.
-> I'd love feedback, especially from anyone selling on Walmart or TikTok Shop.
+> Checking is free. Today only, code `LAUNCH10` takes $10 off Pro. I'd love
+> feedback from anyone selling on several marketplaces at once.
 
 **Topics:** E-Commerce, Photography, Design Tools, Productivity
 
@@ -39,30 +41,31 @@ answer comments, and follow each community's self-promotion rules.
 
 ## Hacker News (Show HN)
 
-**Title:** Show HN: PureFrame – checks and fixes marketplace product photos in the browser
+**Title:** Show HN: PureFrame – proves product photos pass marketplace image checks, in-browser
 
 **Text:**
-> Amazon, Walmart and TikTok Shop reject main images whose background isn't
-> exactly #FFFFFF or where the product fills too little of the frame. Studio
-> "white" usually photographs at 230–250, so this trips up a lot of small
-> sellers.
+> Amazon, Walmart and TikTok Shop want main images on exactly #FFFFFF with
+> the product filling the frame. Studio "white" usually photographs at
+> 230–250, and JPEG compression can push pixels next to the product to
+> 249–254 even after you fix it. PureFrame checks, fixes and then proves it,
+> client-side:
 >
-> PureFrame does the checks and the fix client-side, in a second or two
-> per photo:
+> - **Studio shots:** it fits a quadratic lighting surface to the border,
+>   flood-fills the connected backdrop, and caps the exposure lift by the
+>   product's 99.5th-percentile highlight so white products don't clip. Soft
+>   shadow tails are ramped into the white.
+> - **Busy backgrounds:** it runs U-2-Netp through ONNX Runtime Web (WASM),
+>   then guided-filters the 320 px mask against the photo at up to 1280 px,
+>   and decontaminates edge colours using a local estimate of the old
+>   background.
+> - **Proof:** it encodes the JPEG, decodes it again, and checks every
+>   background pixel more than 8 px from the product. Where a white
+>   background is required or recommended, it steps the quality up (and
+>   falls back to PNG) until they're all 255. An independent numpy check of the exports agrees.
+> - **Packaging:** no framework or build step for the app. The paid version
+>   is the same code plus the model, shipped as files that run from file://.
 >
-> - It fits a quadratic lighting surface to the border to model the backdrop,
->   so vignettes and sweep falloff aren't mistaken for product.
-> - It flood-fills the connected backdrop. Interiors are never touched, so a
->   white plate keeps its tone.
-> - It white-balances from the backdrop, with exposure capped by the
->   product's 99.5th-percentile highlight.
-> - Shadow tails are grown with an edge-aware fill and ramped to white, so
->   they don't end in a hard edge.
-> - It crops and scales to the fill target with an antialiased resampler,
->   then decodes the exported JPEG and grades it again.
->
-> No dependencies or build step. The ZIP writer is about 100 lines. Free to
-> use: SITE
+> Free to use: SITE
 
 ---
 
@@ -81,9 +84,9 @@ r/shopify. Answer the question first; the link is optional.
 > The other usual suspects: the product filling less than 85% of the frame,
 > under 1,000 px on the long side (no zoom), and any text, badges or props.
 >
-> If you'd rather not do it by hand, I made a free browser tool that checks
-> all of this and fixes the background and framing: SITE. Nothing is
-> uploaded.
+> If you'd rather not do it by hand, I made a free browser tool that checks a
+> photo against every marketplace at once and fixes the background and
+> framing (even on busy backgrounds): SITE. Nothing is uploaded.
 
 ---
 
@@ -126,7 +129,7 @@ cheat sheet (`SITE/guides/image-size-cheat-sheet.html`).
 > checker for Amazon, Walmart and Etsy sellers.
 >
 > - Free tool on GitHub Pages; all processing happens in the browser.
-> - Pro is a single offline HTML file sold on Gumroad for $29.
+> - Pro is an offline app sold on Gumroad for $39, with the AI model bundled.
 > - SEO pages for each marketplace's image rules bring in the traffic.
 >
 > I'll share the numbers as they come in. SITE

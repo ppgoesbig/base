@@ -268,3 +268,12 @@ test('a "product" spanning the whole frame means the backdrop never separated', 
   const img = scene({ w: 300, h: 300, bg: [230, 230, 230], box: [-20, -20, 320, 320], noise: 0 });
   assert.equal(E.analyze(img).busy, true);
 });
+
+test('snapWhite turns invisible near-white (>=250) into exact white and nothing else', () => {
+  const img = E.createImage(4, 1);
+  [[250, 252, 254], [249, 255, 255], [255, 255, 255], [120, 130, 140]].forEach((c, i) => img.data.set([...c, 255], i * 4));
+  assert.equal(E.snapWhite(img, 250), 1);
+  assert.deepEqual(Array.from(img.data.slice(0, 3)), [255, 255, 255]);
+  assert.deepEqual(Array.from(img.data.slice(4, 7)), [249, 255, 255]);
+  assert.deepEqual(Array.from(img.data.slice(12, 15)), [120, 130, 140]);
+});
