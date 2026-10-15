@@ -2,7 +2,7 @@
  * The heavy lifting lives in engine.js (pixels) and rules.js (grading). */
 (function () {
   'use strict';
-  const E = window.PFEngine, R = window.PFRules, Z = window.PFZip;
+  const E = window.PFEngine, R = window.PFRules, Z = window.PFZip, Mt = window.PFMatte;
   const CFG = Object.assign({ edition: 'free', proUrl: '#pricing', price: '$29', freeFixLimit: 3, goatcounter: '' }, window.PF_CONFIG);
   const PRO = CFG.edition === 'pro';
   const WORK_MAX = 4000; // longest side we process at; bounds memory and time
@@ -17,7 +17,7 @@
   const params = new URLSearchParams(location.search);
   const state = {
     preset: R.preset(params.get('preset') || store.get('preset') || 'amazon'),
-    settings: Object.assign({ tolerance: 14, levels: true, reframe: true }, store.get('settings')),
+    settings: Object.assign({ tolerance: 14, levels: true, reframe: true, cutout: 'auto', shadow: false }, store.get('settings')),
     out: null,
     items: [],
     fixedIds: new Set(),
@@ -154,6 +154,8 @@
       item.analysis = E.analyze(work);
       item.report = R.evaluate(item.analysis, item.info, state.preset);
       item.status = 'ready';
+      // A busy background will need the AI cut-out: start loading it now.
+      if (needsAI(item) && window.PFCutout && !window.PFCutout.started()) window.PFCutout.load().catch(() => {});
     } catch (err) {
       item.status = 'error';
       item.error = err.message || String(err);
@@ -164,61 +166,123 @@
   const canFix = (item) => PRO || state.fixedIds.has(item.id) || state.fixedIds.size < CFG.freeFixLimit;
   const isStale = (item) => item.fixed && item.fixed.key !== fixKey();
 
+  const AI_MAX = 2400;     // working size for AI cut-outs
+  const REFINE_MAX = 1280; // matte refinement size (sampled up when compositing)
+  const needsAI = (item) => state.settings.cutout === 'ai' ||
+    (state.settings.cutout !== 'off' && item.analysis && item.analysis.busy);
+
+  /* Background work, done once per photo: returns the product on pure white at
+   * working resolution, its bounds, and how that resolution relates to the
+   * original. Busy backgrounds go through the on-device AI cut-out; studio
+   * shots use the backdrop cleanup, which keeps real shadows. */
+  function prepareAI(item, setStage) { return prepare(item, setStage, true); }
+
+  async function prepare(item, setStage, forceAI) {
+    const src = await decode(item.file);
+    const { w } = dims(src);
+    let aiError = null, aiTried = false;
+    try {
+      if ((forceAI || needsAI(item)) && window.PFCutout) {
+        aiTried = true;
+        try {
+          setStage('Loading on-device AI…');
+          await window.PFCutout.load((got, total) => setStage(total ? `Loading on-device AI… ${Math.min(100, Math.round((got / total) * 100))}%` : 'Loading on-device AI…'));
+          setStage('Removing background…');
+          await frame();
+          const work = toImageData(src, Math.min(WORK_MAX, AI_MAX)), small = toImageData(src, REFINE_MAX);
+          const coarse = await window.PFCutout.coarseMask(small);
+          const alphaSmall = Mt.refine(coarse, window.PFCutout.SIZE, window.PFCutout.SIZE, small);
+          const bg = Mt.backgroundEstimate(small, alphaSmall, Math.max(4, Math.round(Math.max(small.width, small.height) / 100)));
+          const alpha = Mt.resize(alphaSmall, small.width, small.height, work.width, work.height);
+          await frame();
+          const img = Mt.compositeOnWhite(work, alpha, bg);
+          if (state.settings.shadow) Mt.groundShadow(img, alpha, Mt.bbox(alpha, work.width, work.height), 0.32);
+          const bbox = E.analyze(img).bbox;
+          if (bbox) return { img, bbox, ws: work.width / w, ai: true, skipped: null };
+          aiError = 'The AI couldn\'t find a clear product in this photo.';
+        } catch (err) {
+          aiError = `Couldn't run the on-device AI (${err.message || err}).`;
+        }
+      }
+      setStage('Cleaning background…');
+      const work = toImageData(src, WORK_MAX);
+      await frame();
+      const white = E.whiten(work, { tolerance: state.settings.tolerance, levels: state.settings.levels });
+      await frame();
+      const after = white.skipped ? null : E.analyze(white.img);
+      // Safety net: if the cleanup couldn't separate product from background
+      // (the "product" spans the whole frame), the backdrop wasn't plain after all.
+      if (after && after.busy && !aiTried && state.settings.cutout !== 'off' && window.PFCutout) {
+        return prepareAI(item, setStage);
+      }
+      return { img: white.img, bbox: after && after.bbox, ws: work.width / w, ai: false, skipped: white.skipped || (after && after.busy ? 'busy-background' : null), aiError };
+    } finally {
+      release(src);
+    }
+  }
+
+  // Lays out, renders, encodes and re-verifies one export of a prepared photo.
+  async function exportPhoto(item, prep, preset, out) {
+    const reframe = state.settings.reframe && prep.bbox;
+    const layout = E.computeLayout(reframe ? prep.bbox : null, prep.img.width, prep.img.height, out.width, out.height, reframe ? out.fill : 0);
+    const img = E.render(prep.img, layout, out.width, out.height);
+    await frame();
+    const canvas = document.createElement('canvas');
+    canvas.width = out.width; canvas.height = out.height;
+    canvas.getContext('2d').putImageData(new ImageData(img.data, out.width, out.height), 0, 0);
+    const blob = await encode(canvas, out);
+
+    // Re-check the exported file exactly as an uploaded photo would be.
+    const vsrc = await decode(blob);
+    const verify = E.analyze(toImageData(vsrc, WORK_MAX));
+    release(vsrc);
+    const ext = out.type === 'image/png' ? '.png' : '.jpg';
+    const name = R.fileName(out.naming, { name: item.stem, index: state.items.indexOf(item) + 1, preset: preset.id, width: out.width, height: out.height }, ext);
+    const report = R.evaluate(verify, { name, type: out.type, size: blob.size, width: out.width, height: out.height, jpeg: null }, preset);
+
+    const notes = [];
+    if (prep.aiError) notes.push(prep.aiError);
+    if (prep.ai) notes.push('Background removed with on-device AI. Zoom in to check fine details such as straps, fur or glass.');
+    if (prep.skipped) {
+      notes.push('The background is too busy to clean automatically, so it was left as is. Turn on "AI cut-out" in Fix settings, or remove the background in another tool first.');
+      // The white padding would read as a clean backdrop; keep the original verdict.
+      const orig = item.report.checks.find((c) => c.id === 'background');
+      report.checks = report.checks.filter((c) => c.id !== 'framing').map((c) => (c.id === 'background' && orig ? orig : c));
+    }
+    const enlarged = layout.scale * prep.ws;
+    if (enlarged > 2) {
+      report.checks.push({ id: 'upscaled', status: 'warn', label: 'Enlarged from a small original',
+        detail: `The product was scaled up ${enlarged.toFixed(1)}×, so it may look soft when shoppers zoom. A larger original will look sharper.` });
+    } else if (reframe && enlarged > 1.3) {
+      notes.push(`The product was enlarged ${enlarged.toFixed(1)}× from the original. It should still look fine, but a larger original is always sharper.`);
+    }
+    report.status = report.checks.reduce((s, c) => ((STATUS_RANK[c.status] || 0) > STATUS_RANK[s] ? c.status : s), 'pass');
+    if (out.maxBytes && blob.size > out.maxBytes) notes.push(`Couldn't get the file under ${R.fmtBytes(out.maxBytes)}. Try JPEG or a smaller size.`);
+    return { blob, name, report, notes, width: out.width, height: out.height, preset: preset.id };
+  }
+
   async function fix(item) {
     if (!canFix(item)) { upsell('limit'); return false; }
     item.status = 'fixing';
     item.fixError = null;
+    item.stage = '';
     renderItem(item);
     await frame();
+    const setStage = (text) => {
+      item.stage = text;
+      const el = document.querySelector(`#item-${item.id} .stage`);
+      if (el) el.textContent = text;
+    };
     try {
       const out = outputSpec(), key = fixKey();
-      const src = await decode(item.file);
-      const { w, h } = dims(src);
-      const ws = Math.min(1, WORK_MAX / Math.max(w, h));
-      const work = toImageData(src, WORK_MAX);
-      release(src);
-      await frame();
-      const white = E.whiten(work, { tolerance: state.settings.tolerance, levels: state.settings.levels });
-      await frame();
-      const bbox = state.settings.reframe && !white.skipped ? E.analyze(white.img).bbox : null;
-      const layout = E.computeLayout(bbox, white.img.width, white.img.height, out.width, out.height, state.settings.reframe ? out.fill : 0);
-      const img = E.render(white.img, layout, out.width, out.height);
-      await frame();
-      const canvas = document.createElement('canvas');
-      canvas.width = out.width; canvas.height = out.height;
-      canvas.getContext('2d').putImageData(new ImageData(img.data, out.width, out.height), 0, 0);
-      const blob = await encode(canvas, out);
-
-      // Re-check the exported file exactly as an uploaded photo would be.
-      const vsrc = await decode(blob);
-      const verify = E.analyze(toImageData(vsrc, WORK_MAX));
-      release(vsrc);
-      const ext = out.type === 'image/png' ? '.png' : '.jpg';
-      const name = R.fileName(out.naming, { name: item.stem, index: state.items.indexOf(item) + 1, preset: state.preset.id, width: out.width, height: out.height }, ext);
-      const report = R.evaluate(verify, { name, type: out.type, size: blob.size, width: out.width, height: out.height, jpeg: null }, state.preset);
-
-      const notes = [];
-      if (white.skipped) {
-        notes.push('The background is too busy to clean automatically, so it was left as is. Remove the background with a cut-out tool first, then run the photo through PureFrame.');
-        // The white padding would read as a clean backdrop; keep the original verdict.
-        const orig = item.report.checks.find((c) => c.id === 'background');
-        report.checks = report.checks.filter((c) => c.id !== 'framing').map((c) => (c.id === 'background' && orig ? orig : c));
-      }
-      const enlarged = layout.scale * ws;
-      if (enlarged > 2) {
-        report.checks.push({ id: 'upscaled', status: 'warn', label: 'Enlarged from a small original',
-          detail: `The product was scaled up ${enlarged.toFixed(1)}×, so it may look soft when shoppers zoom. A larger original will look sharper.` });
-      } else if (bbox && enlarged > 1.3) {
-        notes.push(`The product was enlarged ${enlarged.toFixed(1)}× from the original. It should still look fine, but a larger original is always sharper.`);
-      }
-      report.status = report.checks.reduce((s, c) => ((STATUS_RANK[c.status] || 0) > STATUS_RANK[s] ? c.status : s), 'pass');
-      if (out.maxBytes && blob.size > out.maxBytes) notes.push(`Couldn't get the file under ${R.fmtBytes(out.maxBytes)}. Try JPEG or a smaller size.`);
-
+      const prep = await prepare(item, setStage);
+      setStage('Exporting and re-checking…');
+      const result = await exportPhoto(item, prep, state.preset, out);
       if (item.fixed) URL.revokeObjectURL(item.fixed.url);
-      item.fixed = { blob, url: URL.createObjectURL(blob), name, report, notes, key, width: out.width, height: out.height };
+      item.fixed = Object.assign(result, { url: URL.createObjectURL(result.blob), key, ai: prep.ai });
       item.showBefore = false;
       state.fixedIds.add(item.id);
-      track('fix');
+      track(prep.ai ? 'fix-ai' : 'fix');
     } catch (err) {
       item.fixError = err.message || String(err);
     }
@@ -315,7 +379,8 @@
       ? `Fixed for ${esc(state.preset.name)} · ${item.fixed.width.toLocaleString('en-US')} × ${item.fixed.height.toLocaleString('en-US')} px · ${R.fmtBytes(item.fixed.blob.size)} · <span class="mono">${esc(item.fixed.name)}</span>`
       : `${item.info.width.toLocaleString('en-US')} × ${item.info.height.toLocaleString('en-US')} px · ${R.fmtBytes(item.info.size)}${item.showBefore ? ' · original' : ''}`;
 
-    const notes = (after ? item.fixed.notes : []).map((n) => `<p class="note">${esc(n)}</p>`).join('')
+    const notes = (fixing ? `<p class="stage muted">${esc(item.stage || 'Working…')}</p>` : '')
+      + (after ? item.fixed.notes : []).map((n) => `<p class="note">${esc(n)}</p>`).join('')
       + (item.fixError ? `<p class="note note-error">${esc(item.fixError)}</p>` : '')
       + (item.fixed && isStale(item) ? '<p class="note">Settings changed since this photo was fixed. Fix it again to apply them.</p>' : '');
 
@@ -396,6 +461,8 @@
     $('tolOut').textContent = s.tolerance;
     $('levels').checked = s.levels;
     $('reframe').checked = s.reframe;
+    $('cutout').value = s.cutout;
+    $('shadow').checked = s.shadow;
     $('outW').value = o.width;
     $('outH').value = o.height;
     $('fill').value = Math.round(o.fill * 100);
@@ -410,6 +477,8 @@
       tolerance: +$('tolerance').value,
       levels: $('levels').checked,
       reframe: $('reframe').checked,
+      cutout: $('cutout').value,
+      shadow: $('shadow').checked,
     };
     store.set('settings', state.settings);
     if (PRO) {
@@ -476,7 +545,7 @@
 
     syncSettingsUI();
     renderRules();
-    for (const id of ['tolerance', 'levels', 'reframe', 'outW', 'outH', 'fill', 'outType', 'quality', 'naming']) {
+    for (const id of ['tolerance', 'levels', 'reframe', 'cutout', 'shadow', 'outW', 'outH', 'fill', 'outType', 'quality', 'naming']) {
       $(id).addEventListener(id === 'tolerance' || id === 'fill' ? 'input' : 'change', onSettingsChange);
     }
     if (!PRO) {

@@ -41,8 +41,10 @@
     }
   }
 
-  /* files: [{ name, data: Uint8Array }] -> Uint8Array of the .zip */
-  function build(files, now) {
+  /* files: [{ name, data: Uint8Array }] -> Uint8Array of the .zip
+   * deflateRaw (optional, e.g. Node's zlib.deflateRawSync) compresses entries
+   * when that makes them smaller; without it entries are stored. */
+  function build(files, now, deflateRaw) {
     const enc = new TextEncoder();
     const { time, date } = dosDateTime(now || new Date());
     const used = new Set();
@@ -51,34 +53,39 @@
     for (const f of files) {
       const name = enc.encode(uniqueName(f.name, used));
       const crc = crc32(f.data), size = f.data.length;
+      let body = f.data, method = 0;
+      if (deflateRaw) {
+        const packed = deflateRaw(f.data);
+        if (packed.length < size) { body = packed; method = 8; }
+      }
       const local = new DataView(new ArrayBuffer(30));
       local.setUint32(0, 0x04034b50, true);
       local.setUint16(4, 20, true);       // version needed
       local.setUint16(6, 0x0800, true);   // UTF-8 names
-      local.setUint16(8, 0, true);        // stored
+      local.setUint16(8, method, true);   // 0 stored, 8 deflate
       local.setUint16(10, time, true);
       local.setUint16(12, date, true);
       local.setUint32(14, crc, true);
-      local.setUint32(18, size, true);
+      local.setUint32(18, body.length, true);
       local.setUint32(22, size, true);
       local.setUint16(26, name.length, true);
-      chunks.push(new Uint8Array(local.buffer), name, f.data);
+      chunks.push(new Uint8Array(local.buffer), name, body);
 
       const cd = new DataView(new ArrayBuffer(46));
       cd.setUint32(0, 0x02014b50, true);
       cd.setUint16(4, 20, true);
       cd.setUint16(6, 20, true);
       cd.setUint16(8, 0x0800, true);
-      cd.setUint16(10, 0, true);
+      cd.setUint16(10, method, true);
       cd.setUint16(12, time, true);
       cd.setUint16(14, date, true);
       cd.setUint32(16, crc, true);
-      cd.setUint32(20, size, true);
+      cd.setUint32(20, body.length, true);
       cd.setUint32(24, size, true);
       cd.setUint16(28, name.length, true);
       cd.setUint32(42, offset, true);
       central.push(new Uint8Array(cd.buffer), name);
-      offset += 30 + name.length + size;
+      offset += 30 + name.length + body.length;
     }
     const cdSize = central.reduce((n, c) => n + c.length, 0);
     const end = new DataView(new ArrayBuffer(22));

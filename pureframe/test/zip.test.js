@@ -24,3 +24,18 @@ test('build produces an archive Python\'s zipfile can read, with unique names', 
     'print(json.dumps([[i.filename, i.file_size] for i in z.infolist()]))', zipPath]).toString();
   assert.deepEqual(JSON.parse(listing), [['a.jpg', 3], ['a-2.jpg', 2], ['ünïcode.MAIN.jpg', 1000]]);
 });
+
+test('build can deflate entries (Node zlib) and stays readable', () => {
+  const zlib = require('node:zlib');
+  const text = new TextEncoder().encode('PureFrame '.repeat(5000));
+  const files = [{ name: 'big.txt', data: text }, { name: 'tiny.bin', data: Uint8Array.from([9]) }];
+  const zip = Z.build(files, new Date(2026, 9, 14), (d) => zlib.deflateRawSync(d));
+  assert.ok(zip.length < text.length / 10, `compressed to ${zip.length}`);
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pfzip-'));
+  const zipPath = path.join(dir, 'out.zip');
+  fs.writeFileSync(zipPath, zip);
+  const out = execFileSync('python3', ['-I', '-c',
+    'import sys, zipfile, json; z = zipfile.ZipFile(sys.argv[1]); assert z.testzip() is None; ' +
+    'print(json.dumps([[i.filename, i.compress_type, len(z.read(i))] for i in z.infolist()]))', zipPath]).toString();
+  assert.deepEqual(JSON.parse(out), [['big.txt', 8, text.length], ['tiny.bin', 0, 1]]);
+});

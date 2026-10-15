@@ -162,11 +162,11 @@
     const W = file.width, H = file.height, longest = Math.max(W, H), shortest = Math.min(W, H);
 
     // Background
-    const bg = a.background, busy = a.uniformity < 0.6;
+    const bg = a.background, busy = a.busy != null ? a.busy : a.uniformity < 0.6;
     const severity = preset.background === 'required' ? 'fail' : preset.background === 'recommended' ? 'warn' : 'info';
     if (busy) {
       add('background', severity, 'Busy background',
-        'The edges aren\'t a plain backdrop, which suggests a lifestyle or cluttered shot. Main images need the product on plain white.');
+        'The edges aren\'t a plain backdrop, which suggests a lifestyle or cluttered shot. Main images need the product on plain white. Fix cuts the product out with on-device AI.');
     } else if (bg.pure >= 0.97) {
       add('background', 'pass', 'Pure white background', `${pct(bg.pure)} of the background is exactly #FFFFFF.`);
     } else if (bg.near >= 0.97) {

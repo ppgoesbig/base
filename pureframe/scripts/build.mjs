@@ -7,10 +7,12 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
+import zlib from 'node:zlib';
 
 const require = createRequire(import.meta.url);
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const SITE = path.join(ROOT, 'site');
+const VENDOR = path.join(ROOT, 'vendor');
 const DIST = process.env.PF_DIST ? path.resolve(process.env.PF_DIST) : path.join(ROOT, 'dist');
 const SITE_URL = (process.env.SITE_URL || 'https://ppgoesbig.github.io/base').replace(/\/+$/, '');
 const R = require(path.join(SITE, 'js/rules.js'));
@@ -37,6 +39,8 @@ function copyDir(src, dst) {
 }
 const OUT = path.join(DIST, 'site');
 copyDir(SITE, OUT);
+// On-device AI runtime + model (loaded lazily by js/cutout.js from vendor/).
+copyDir(VENDOR, path.join(OUT, 'vendor'));
 
 const INTROS = {
   amazon: 'Amazon is the strictest marketplace about the main image. Its systems scan for an exact white background and a product that fills the frame, and a listing whose main image fails can be suppressed from search until it\'s fixed. Here is what the main image needs, in one place.',
@@ -228,12 +232,20 @@ write(path.join(OUT, '404.html'), page({
 let pro = stripFree(read('index.html'));
 const inline = (file) => read(file).replace(/<\/script/gi, '<\\/script');
 pro = pro.replace('<link rel="stylesheet" href="css/styles.css">', () => `<style>\n${read('css/styles.css')}</style>`);
-pro = pro.replace('<script src="js/config.js"></script>', () => `<script>window.PF_CONFIG = { edition: 'pro', proUrl: '', price: '', freeFixLimit: Infinity, goatcounter: '' };</script>`);
-for (const f of ['engine', 'rules', 'zip', 'app']) pro = pro.replace(`<script src="js/${f}.js"></script>`, () => `<script>\n${inline(`js/${f}.js`)}</script>`);
+pro = pro.replace('<script src="js/config.js"></script>', () => `<script>window.PF_CONFIG = { edition: 'pro', proUrl: '', price: '', freeFixLimit: Infinity, goatcounter: '', aiAssets: 'script', aiScript: 'PureFrame AI.js' };</script>`);
+for (const f of ['engine', 'rules', 'zip', 'matte', 'cutout', 'app']) pro = pro.replace(`<script src="js/${f}.js"></script>`, () => `<script>\n${inline(`js/${f}.js`)}</script>`);
 pro = pro.replace('<body class="edition-free">', '<body class="edition-pro">');
 pro = pro.replace(/<title>[^<]*<\/title>/, '<title>PureFrame Pro</title>');
 if (/src="js\/|href="css\//.test(pro)) throw new Error('Pro build still references external files');
 write(path.join(DIST, 'pro', 'PureFrame Pro.html'), pro);
+
+// The AI runtime and model, base64-encoded in a classic script: browsers
+// refuse fetch() from file://, but a <script src> next to the HTML loads fine.
+const vendor = (f) => fs.readFileSync(path.join(VENDOR, f));
+const aiScript = `/* PureFrame Pro on-device AI: ONNX Runtime Web 1.30.0 (MIT) and the U-2-Netp model (Apache-2.0).\n   See the licenses folder. Keep this file next to PureFrame Pro.html. */\n` +
+  `window.PF_AI_ASSETS = { ort: ${JSON.stringify(vendor('ort.wasm.bundle.min.mjs').toString('utf8'))}, ` +
+  `wasm: "${vendor('ort-wasm-simd-threaded.wasm').toString('base64')}", model: "${vendor('u2netp.onnx').toString('base64')}" };\n`;
+write(path.join(DIST, 'pro', 'PureFrame AI.js'), aiScript);
 
 const readme = `PureFrame Pro
 =============
@@ -241,7 +253,8 @@ const readme = `PureFrame Pro
 Thanks for buying PureFrame Pro!
 
 GETTING STARTED
-1. Unzip this folder anywhere you like (Desktop, Documents...).
+1. Unzip this folder anywhere you like (Desktop, Documents...). Keep the
+   files together: "PureFrame AI.js" powers the AI background removal.
 2. Double-click "PureFrame Pro.html". It opens in your web browser
    (Chrome, Edge, Safari or Firefox) on Mac, Windows or Linux.
 3. Choose your marketplace, drop in your photos, then click "Fix all"
@@ -253,6 +266,8 @@ taskbar, so it's one click away.
 WHAT'S INCLUDED
 - Unlimited checks and one-click fixes for Amazon, Walmart, TikTok Shop,
   eBay, Etsy, Shopify and Google Shopping.
+- On-device AI background removal for photos shot anywhere (kitchen
+  table, desk, outdoors). Runs offline; nothing is uploaded.
 - ZIP download of the whole batch.
 - Bulk renaming for upload, e.g. {name}.MAIN -> B0C1234567.MAIN.jpg
   (Fix settings > Output > File names).
@@ -263,8 +278,9 @@ TIPS FOR BEST RESULTS
 - Shoot on a white or light grey backdrop with even light.
 - If grey patches remain, raise "Background cleanup". If a white product
   loses its edges, lower it.
-- PureFrame cleans plain studio backdrops. For busy or lifestyle
-  backgrounds, cut the product out first, then run it through PureFrame.
+- Studio shots use the backdrop cleanup, which keeps real shadows. Busy
+  backgrounds are cut out by the on-device AI automatically (Fix settings >
+  AI cut-out). Zoom in to check fine details such as straps, fur or glass.
 - Content rules (no text, logos or props) still need your eye.
 
 UPDATES & SUPPORT
@@ -277,10 +293,14 @@ This copy is licensed to you for use in your own business (any number of
 your own devices). Please don't share or resell the file.
 `;
 write(path.join(DIST, 'pro', 'READ ME FIRST.txt'), readme);
+const licenses = ['README.md', 'LICENSE-onnxruntime-web.txt', 'LICENSE-U2Net-Apache-2.0.txt']
+  .map((f) => ({ name: `PureFrame Pro/licenses/${f === 'README.md' ? 'THIRD-PARTY.md' : f}`, data: vendor(f) }));
 const zip = Z.build([
   { name: 'PureFrame Pro/PureFrame Pro.html', data: new TextEncoder().encode(pro) },
+  { name: 'PureFrame Pro/PureFrame AI.js', data: new TextEncoder().encode(aiScript) },
   { name: 'PureFrame Pro/READ ME FIRST.txt', data: new TextEncoder().encode(readme) },
-]);
+  ...licenses,
+], undefined, (d) => zlib.deflateRawSync(d, { level: 9 }));
 write(path.join(DIST, 'PureFrame-Pro.zip'), zip);
 
-console.log(`Built dist/site (${pages.length} pages, SITE_URL=${SITE_URL}) and dist/PureFrame-Pro.zip (${Math.round(zip.length / 1024)} KB)`);
+console.log(`Built dist/site (${pages.length} pages, SITE_URL=${SITE_URL}) and dist/PureFrame-Pro.zip (${(zip.length / 1048576).toFixed(1)} MB)`);

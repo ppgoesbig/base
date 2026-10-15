@@ -151,11 +151,29 @@
         }
       }
     }
-    const model = { bg, band, step, gw, grid, uniformity: 0 };
+    const model = { bg, band, step, gw, grid, uniformity: 0, roughness: 0 };
     let similar = 0;
     forEachBorder(W, H, band, (i) => { if (distToBackdrop(data, i * 4, model, i % W, (i / W) | 0) <= tol) similar++; });
     model.uniformity = similar / n;
+    model.roughness = roughness(img, band);
     return model;
+  }
+
+  /* Texture of the border band: mean luminance change between pixels a fixed
+   * fraction of the image apart. Seamless paper and sweeps are smooth (well
+   * under 3, mostly sensor noise); tables, bricks and rooms are rough. */
+  const ROUGH = 5;
+  function roughness(img, band) {
+    const { width: W, height: H, data } = img;
+    const s = Math.max(1, Math.round((2 * Math.max(W, H)) / 1000));
+    const lum = (i) => 0.299 * data[i * 4] + 0.587 * data[i * 4 + 1] + 0.114 * data[i * 4 + 2];
+    let sum = 0, n = 0;
+    forEachBorder(W, H, band, (i) => {
+      const x = i % W, y = (i / W) | 0, l = lum(i);
+      if (x + s < W) { sum += Math.abs(lum(i + s) - l); n++; }
+      if (y + s < H) { sum += Math.abs(lum(i + s * W) - l); n++; }
+    });
+    return n ? sum / n : 0;
   }
 
   function distToBackdrop(d, p, m, x, y) {
@@ -261,9 +279,13 @@
       n = pure = near = sr = sg = sb = 0;
       forEachBorder(W, H, borderBand(W, H), (i) => { if (mask[i]) tally(i); });
     }
+    // Not a plain backdrop: a cluttered or textured border, or a "product" that
+    // fills the whole frame because the backdrop never separated from it.
+    const edgesTouched = touches ? Object.values(touches).filter(Boolean).length : 0;
+    const busy = model.uniformity < 0.6 || model.roughness > ROUGH || (!!fill && fill.x >= 0.97 && fill.y >= 0.97 && edgesTouched >= 3);
     return {
-      width: W, height: H, transparent,
-      backdrop: model.bg, uniformity: model.uniformity,
+      width: W, height: H, transparent, busy,
+      backdrop: model.bg, uniformity: model.uniformity, roughness: model.roughness,
       background: {
         coverage: bgCount / (W * H),
         pure: n ? pure / n : 0,
@@ -300,7 +322,7 @@
     const { width: W, height: H, data } = img;
     const model = backdropModel(img, DETECT_TOLERANCE);
     const res = { img, skipped: null, gains: null, backdrop: model.bg, whitened: 0 };
-    if (model.uniformity < 0.6) { res.skipped = 'busy-background'; return res; }
+    if (model.uniformity < 0.6 || model.roughness > ROUGH) { res.skipped = 'busy-background'; return res; }
 
     const tol = o.tolerance;
     const mask = floodBackground(img, model, tol);
@@ -506,7 +528,7 @@
   }
 
   return {
-    DETECT_TOLERANCE, createImage, composite, hasTransparency, backdropModel,
+    DETECT_TOLERANCE, ROUGH, createImage, composite, hasTransparency, backdropModel,
     floodBackground, analyze, whiten, computeLayout, render, jpegInfo,
   };
 });

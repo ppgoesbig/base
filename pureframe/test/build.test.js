@@ -44,5 +44,20 @@ test('the Pro build is one self-contained file with no marketing or upsell', () 
   assert.ok(!/<script[^>]+src=|<link[^>]+stylesheet/.test(pro), 'no external scripts or styles');
   assert.ok(!pro.includes('id="pricing"') && !pro.includes('id="upsell"'));
   assert.match(pro, /edition: 'pro'/);
-  assert.ok(fs.statSync(path.join(dist, 'PureFrame-Pro.zip')).size > 10000);
+  assert.match(pro, /aiAssets: 'script'/);
+  const ai = fs.readFileSync(path.join(dist, 'pro', 'PureFrame AI.js'), 'utf8');
+  assert.match(ai, /^\/\* PureFrame Pro on-device AI/);
+  assert.ok(ai.length > 20e6, 'AI assets embedded');
+  const listing = execFileSync('python3', ['-I', '-c',
+    'import sys, zipfile; z = zipfile.ZipFile(sys.argv[1]); assert z.testzip() is None; print("\\n".join(z.namelist()))',
+    path.join(dist, 'PureFrame-Pro.zip')]).toString().trim().split('\n');
+  for (const f of ['PureFrame Pro.html', 'PureFrame AI.js', 'READ ME FIRST.txt', 'licenses/THIRD-PARTY.md', 'licenses/LICENSE-U2Net-Apache-2.0.txt', 'licenses/LICENSE-onnxruntime-web.txt']) {
+    assert.ok(listing.includes(`PureFrame Pro/${f}`), `zip has ${f}`);
+  }
+});
+
+test('the site ships the AI runtime and model for lazy loading', () => {
+  for (const f of ['ort.wasm.bundle.min.mjs', 'ort-wasm-simd-threaded.wasm', 'u2netp.onnx', 'LICENSE-U2Net-Apache-2.0.txt']) {
+    assert.ok(fs.existsSync(path.join(site, 'vendor', f)), f);
+  }
 });

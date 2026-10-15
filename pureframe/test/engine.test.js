@@ -245,3 +245,26 @@ test('soft shadows fade into the white backdrop without a hard edge', () => {
   assert.equal(out.data[(330 * 400 + 200) * 4], 255, 'below the shadow is pure white');
   assert.ok(out.data[(242 * 400 + 200) * 4] < 200, 'shadow core is kept');
 });
+
+test('textured surfaces (wood, bricks) count as busy; smooth sweeps do not', () => {
+  const W = 400, H = 300;
+  const wood = E.createImage(W, H), rand = rng(11);
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+    // grain bands plus fine fibre noise, like a photographed tabletop
+    const p = (y * W + x) * 4, v = 130 + 40 * Math.sin(x / 2.1) * Math.sin(y / 7.3) + (rand() - 0.5) * 24;
+    wood.data[p] = v + 40; wood.data[p + 1] = v; wood.data[p + 2] = v - 40; wood.data[p + 3] = 255;
+  }
+  const a = E.analyze(wood);
+  assert.ok(a.roughness > E.ROUGH, `wood roughness ${a.roughness}`);
+  assert.equal(a.busy, true);
+  assert.equal(E.whiten(wood).skipped, 'busy-background');
+  const sweep = vignette(scene({ w: W, h: H, bg: [236, 236, 236], noise: 3 }), 30);
+  const b = E.analyze(sweep);
+  assert.ok(b.roughness < 3, `sweep roughness ${b.roughness}`);
+  assert.equal(b.busy, false);
+});
+
+test('a "product" spanning the whole frame means the backdrop never separated', () => {
+  const img = scene({ w: 300, h: 300, bg: [230, 230, 230], box: [-20, -20, 320, 320], noise: 0 });
+  assert.equal(E.analyze(img).busy, true);
+});
