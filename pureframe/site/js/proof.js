@@ -75,18 +75,26 @@
 
   const num = (v) => (typeof v === 'number' && Number.isFinite(v) ? v : null);
   const str = (v) => (v == null ? '' : String(v));
+  // The objects in an array, skipping null and anything else that isn't one
+  const objects = (v) => (Array.isArray(v) ? v.filter((x) => x !== null && typeof x === 'object') : []);
 
   /* One JSON-serialisable record per exported file.
    * report: PFRules.evaluate() of the decoded export; analysis: PFEngine.analyze()
    * of it; strict: strictBackground() result (optional); file: { name, size,
-   * type, width, height } of the export; preset: { id, name }. */
-  function evidence({ file, marketplace, preset, report, analysis, strict, attempts, encoder } = {}) {
-    file = file || {};
-    const checks = ((report && report.checks) || []).map((c) => ({
+   * type, width, height } of the export; preset: { id, name }.
+   * A strict result that checked no pixels (no white far enough from the
+   * product, e.g. a full-bleed photo) measured nothing: its pure 1 and
+   * darkest 255 are placeholders, so the record says null rather than
+   * presenting them as proof. */
+  function evidence(input) {
+    const { marketplace, preset, report, analysis, strict, attempts, encoder } = input || {};
+    const file = (input && input.file) || {};
+    const checks = objects(report && report.checks).map((c) => ({
       id: str(c.id), status: str(c.status), label: str(c.label), detail: str(c.detail),
     }));
     const labels = (status) => checks.filter((c) => c.status === status).map((c) => c.label);
     const bg = analysis && analysis.background;
+    const measured = strict && num(strict.checked) > 0 ? strict : null;
     return {
       file: str(file.name),
       marketplace: str(marketplace || (preset && preset.name)),
@@ -98,9 +106,9 @@
       type: str(file.type),
       colour: 'sRGB',
       backgroundPure: bg ? num(bg.pure) : null,
-      strictPure: strict ? num(strict.pure) : null,
-      darkestBackground: strict ? num(strict.darkest) : null,
-      strayPixels: strict ? num(strict.nonWhite) : null,
+      strictPure: measured ? num(measured.pure) : null,
+      darkestBackground: measured ? num(measured.darkest) : null,
+      strayPixels: measured ? num(measured.nonWhite) : null,
       fill: analysis && analysis.fill ? num(analysis.fill.longest) : null,
       attempts: num(attempts),
       encoder: encoder == null ? null : String(encoder),
@@ -131,23 +139,27 @@
     'background_pure_pct', 'strict_pure_pct', 'darkest_background', 'stray_pixels', 'fill_pct',
     'encoder', 'attempts', 'failed', 'warned'];
 
-  /* RFC 4180 cell. Text that a spreadsheet would run as a formula gets a
-   * leading apostrophe; numbers are written as they are. */
+  /* RFC 4180 cell. Text that a spreadsheet would run as a formula gets an
+   * apostrophe; numbers are written as they are. Excel in many European
+   * locales splits .csv files on ';' and only honours quotes at the start of
+   * a line, so the guard also covers text right after every ';', and cells
+   * with ';' are quoted for readers that accept either separator. */
   function csvCell(v) {
     if (v == null) return '';
     if (typeof v === 'number') return Number.isFinite(v) ? String(v) : '';
-    let s = String(v);
-    if (/^[=+\-@\t\r]/.test(s)) s = "'" + s;
-    return /[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+    const s = String(v).replace(/(^|;)(?=[=+\-@\t\r])/g, "$1'");
+    return /[",;\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
   }
+
+  const joined = (v) => (Array.isArray(v) ? v.filter((x) => x != null).join('; ') : '');
 
   function toCSV(records) {
     const lines = [CSV_COLUMNS.join(',')];
-    for (const r of records || []) {
+    for (const r of objects(records)) {
       lines.push([
         r.file, r.marketplace, r.status, num(r.width), num(r.height), num(r.bytes), r.type, r.colour,
         pct1(r.backgroundPure), pct1(r.strictPure), num(r.darkestBackground), num(r.strayPixels), pct1(r.fill),
-        r.encoder, num(r.attempts), (r.failed || []).join('; '), (r.warned || []).join('; '),
+        r.encoder, num(r.attempts), joined(r.failed), joined(r.warned),
       ].map(csvCell).join(','));
     }
     return lines.join('\r\n') + '\r\n';
@@ -212,8 +224,9 @@ h2{break-after:avoid;page-break-after:avoid}
   /* A standalone, printable HTML document: inline CSS, no scripts, no external
    * resources. generatedAt is shown as given (this module never reads the
    * clock); product is the tool name, e.g. 'PureFrame Pro'. */
-  function reportHTML(records, { title, generatedAt, product } = {}) {
-    records = records || [];
+  function reportHTML(records, opts) {
+    const { title, generatedAt, product } = opts || {};
+    records = objects(records);
     const tool = product ? String(product) : 'PureFrame';
     const heading = title ? String(title) : `${tool} evidence report`;
     const count = { pass: 0, warn: 0, fail: 0 };
@@ -232,7 +245,7 @@ h2{break-after:avoid;page-break-after:avoid}
 
     const fact = (label, value) => `<div><dt>${esc(label)}</dt><dd>${esc(value)}</dd></div>`;
     const details = records.map((r) => {
-      const checks = (r.checks || []).map((c) => `<li>${badge(c.status)}<div><div class="label">${esc(c.label)}</div>`
+      const checks = objects(r.checks).map((c) => `<li>${badge(c.status)}<div><div class="label">${esc(c.label)}</div>`
         + `${c.detail ? `<div class="detail">${esc(c.detail)}</div>` : ''}</div></li>`).join('\n');
       return `<section class="record">
 <h3>${esc(r.file)}</h3>
@@ -280,7 +293,7 @@ ${rows}
 </table>
 <h2>How to read this</h2>
 <dl class="glossary">
-<dt>Strict background</dt><dd>Share of the background, away from the product edge, that is exactly #FFFFFF (RGB 255, 255, 255) in the saved file, measured after compression.</dd>
+<dt>Strict background</dt><dd>Share of the background, away from the product edge, that is exactly #FFFFFF (RGB 255, 255, 255) in the saved file, measured after compression. A dash means there was no such background to measure, for example when the photo fills the frame.</dd>
 <dt>Darkest background</dt><dd>The lowest colour value found in that background. 255 means every pixel is pure white.</dd>
 <dt>Stray pixels</dt><dd>How many background pixels are not exactly white in the saved file.</dd>
 <dt>Fill</dt><dd>How much of the frame the product's longest side spans.</dd>

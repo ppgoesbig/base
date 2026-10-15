@@ -227,6 +227,51 @@ test('evidence lists failed and warned check labels and copies the checks', () =
   assert.notEqual(e.checks[0].label, 'changed later');
 });
 
+test('evidence leaves the strict background empty when no pixels were checked', () => {
+  // A busy, full-bleed photo has no white anywhere, so nothing is measured.
+  const busy = image(40, 40, [120, 90, 60]);
+  const strict = P.strictBackground(busy, copy(busy), { margin: 8 });
+  assert.equal(strict.checked, 0);
+  const a = { ...goodAnalysis, background: { coverage: 0.4, pure: 0, near: 0, mean: [120, 90, 60] } };
+  const f = { ...outFile, name: 'busy.jpg' };
+  const report = R.evaluate(a, f, amazon);
+  const e = P.evidence({ file: f, preset: amazon, report, analysis: a, strict, attempts: 1, encoder: 'JPEG q92' });
+  assert.equal(e.status, 'fail');
+  assert.equal(e.strictPure, null);
+  assert.equal(e.darkestBackground, null);
+  assert.equal(e.strayPixels, null);
+  const cells = P.toCSV([e]).split('\r\n')[1].split(',');
+  assert.deepEqual(cells.slice(9, 12), ['', '', ''], 'no 100.0% / 255 / 0 in the CSV');
+  const row = P.reportHTML([e], {}).match(/<tr>\n<td class="name">busy\.jpg[\s\S]*?<\/tr>/)[0];
+  assert.ok(!row.includes('100.0%') && !/>255</.test(row) && !/>0</.test(row), row);
+  // a missing count is treated the same way
+  assert.equal(P.evidence({ file: f, report, analysis: a, strict: { pure: 1, darkest: 255, nonWhite: 0 } }).strictPure, null);
+  // one checked pixel is a real measurement
+  assert.equal(P.evidence({ file: f, report, analysis: a, strict: { checked: 1, nonWhite: 0, darkest: 255, pure: 1 } }).strictPure, 1);
+});
+
+test('evidence, CSV and report tolerate null inputs and entries', () => {
+  const e = P.evidence(null);
+  assert.equal(e.file, '');
+  assert.equal(e.status, 'fail');
+  assert.deepEqual(e.checks, []);
+  assert.deepEqual(P.evidence(), e);
+  const withNullCheck = P.evidence({ file: outFile, report: { status: 'warn', checks: [null, { id: 'a', status: 'warn', label: 'Large file', detail: '' }] } });
+  assert.deepEqual(withNullCheck.checks, [{ id: 'a', status: 'warn', label: 'Large file', detail: '' }]);
+  assert.deepEqual(withNullCheck.warned, ['Large file']);
+
+  assert.equal(P.toCSV([null, undefined, 'x']), HEADER + '\r\n');
+  assert.equal(P.toCSV([null, record()]), P.toCSV([record()]));
+  assert.equal(P.toCSV([record({ failed: null, warned: 'not a list' })]).split('\r\n')[1].slice(-2), ',,');
+
+  const html = P.reportHTML([null, record({ checks: [null, { id: 'b', status: 'pass', label: 'Pure white', detail: '' }] })], null);
+  assert.match(html, /<title>PureFrame evidence report<\/title>/);
+  assert.match(html, /1 file: 1 passed/);
+  assert.ok(html.includes('Pure white'));
+  assert.match(P.reportHTML(null, null), /0 files/);
+  assert.match(P.reportHTML({ length: 2 }), /0 files/);
+});
+
 test('evidence uses null when no product or measurement is available', () => {
   const a = { ...goodAnalysis, fill: null };
   const e = P.evidence({ file: outFile, preset: amazon, report: R.evaluate(a, outFile, amazon), analysis: a, encoder: 'PNG' });
@@ -268,7 +313,50 @@ test('CSV quotes commas, quotes and newlines and joins failed checks', () => {
   const csv = P.toCSV([record({ file: 'mug, blue "large".jpg', marketplace: 'Line\nbreak', failed: ['Image too small', 'Too much empty space'], warned: ['Large file'] })]);
   const body = csv.slice(HEADER.length + 2);
   assert.ok(body.startsWith('"mug, blue ""large"".jpg","Line\nbreak",pass,'), body);
-  assert.ok(body.endsWith(',Image too small; Too much empty space,Large file\r\n'), body);
+  // ';' is quoted too, so readers that split on it keep the list in one cell
+  assert.ok(body.endsWith(',"Image too small; Too much empty space",Large file\r\n'), body);
+});
+
+// Split a line the way Excel does in locales whose list separator is ';':
+// quotes only count at the start of a field.
+function splitSemicolon(line) {
+  const out = [];
+  let cell = '', quoted = false;
+  for (let i = 0; i < line.length; i++) {
+    const c = line[i];
+    if (quoted) {
+      if (c !== '"') cell += c;
+      else if (line[i + 1] === '"') { cell += '"'; i++; } else quoted = false;
+    } else if (c === '"' && cell === '') quoted = true;
+    else if (c === ';') { out.push(cell); cell = ''; } else cell += c;
+  }
+  out.push(cell);
+  return out;
+}
+
+test('CSV formula guard holds where Excel splits on semicolons', () => {
+  const formula = /^[=+\-@\t\r]/;
+  const name = R.fileName('{name}', { name: 'shoe;=HYPERLINK(CHAR(104)&CHAR(116));', index: 1, preset: 'amazon', width: 2000, height: 2000 }, '.jpg');
+  assert.equal(name, 'shoe;=HYPERLINK(CHAR(104)&CHAR(116));.jpg', 'the file name sanitizer keeps these characters');
+  for (const over of [
+    { file: name },
+    { file: 'x;=2+5;.jpg' },
+    { file: 'a;+1;-2;@3;\t4.jpg' },
+    // later columns are not at the start of a line, so quotes don't protect them
+    { marketplace: 'Shop;=1+1' },
+    { failed: ['Too small', '=1+1'] },
+  ]) {
+    const line = P.toCSV([record(over)]).split('\r\n')[1];
+    for (const cell of splitSemicolon(line)) assert.doesNotMatch(cell, formula, line);
+    for (const cell of line.split(';')) assert.doesNotMatch(cell, formula, line);
+  }
+  const line = P.toCSV([record({ file: 'x;=2+5;.jpg' })]).split('\r\n')[1];
+  assert.ok(line.startsWith('"x;\'=2+5;.jpg",Amazon,'), line);
+  // in the first column the quotes keep the whole name in one cell
+  assert.ok(splitSemicolon(line)[0].startsWith("x;'=2+5;.jpg,Amazon,"), line);
+  // ordinary text after '; ' is left alone
+  const joinedLine = P.toCSV([record({ warned: ['Large file', 'Below recommended size'] })]).split('\r\n')[1];
+  assert.ok(joinedLine.endsWith(',"Large file; Below recommended size"'), joinedLine);
 });
 
 test('CSV guards text cells against formula injection', () => {

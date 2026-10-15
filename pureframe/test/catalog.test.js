@@ -86,7 +86,43 @@ test('a repeated SKU merges identifiers and drops the per-photo variant', () => 
   const sku = idx.bySku.get('abc');
   assert.equal(sku.asin, 'B000123456');
   assert.equal(sku.variant, '');
+  assert.equal(sku.conflicts, undefined);
   assert.equal(idx.byFile.get('a').variant, 'MAIN');
+  // Still one product, though only one row has the ASIN.
+  assert.deepEqual(names(C.match(['b.jpg', 'a.jpg'], idx), 'walmart'), ['ABC_1.jpg', 'ABC.jpg']);
+});
+
+test('a SKU on one row that names a file drops the variant too', () => {
+  const named = indexOf('file,sku,variant\nm.jpg,MUG,MAIN\n');
+  assert.equal(named.bySku.get('mug').variant, '');
+  assert.equal(named.byFile.get('m').variant, 'MAIN');
+  // With no file name the row is kept as is.
+  assert.equal(indexOf('sku,variant\nMUG,MAIN\n').bySku.get('mug').variant, 'MAIN');
+});
+
+test('placeholder SKUs are not indexed, and a placeholder never hides a real identifier', () => {
+  assert.equal(indexOf('file,sku\na.jpg,N/A\nb.jpg,-\nc.jpg,0\n').bySku.size, 0);
+  const idx = indexOf('sku,asin\nMUG,N/A\nMUG,B000123456\n');
+  assert.equal(idx.bySku.get('mug').asin, 'B000123456');
+  assert.deepEqual(C.preview(['MUG.jpg'], idx, ['amazon'], '.jpg'),
+    [{ file: 'MUG.jpg', marketplace: 'amazon', name: 'B000123456.MAIN.jpg', problem: null }]);
+});
+
+test('rows of one SKU that disagree on an identifier are flagged, not guessed', () => {
+  const idx = indexOf(`sku,asin,upc\nTEE01,B0RED00001,${UPC}\nTEE01,B0BLU00001,${UPC}\n`);
+  const sku = idx.bySku.get('tee01');
+  assert.deepEqual(sku.conflicts, ['asin']);
+  assert.equal(sku.asin, '');
+  const rows = C.preview(['TEE01_blue.jpg'], idx, ['amazon', 'walmart', 'etsy'], '.jpg');
+  assert.deepEqual(rows.map((r) => [r.name, r.problem]), [
+    [null, 'Rows with this SKU have different ASINs, so this photo can\'t be matched to one. Add its file name to the right row'],
+    [`${UPC}.jpg`, null],
+    ['TEE01.jpg', null],
+  ]);
+  // Formatting differences and a dropped leading zero aren't disagreements.
+  const same = indexOf(`sku,asin,upc\nMUG,b000123456,${UPC}\nMUG,B000-123456,${UPC.slice(1)}\nMUG,,00${UPC}\n`);
+  assert.equal(same.bySku.get('mug').conflicts, undefined);
+  assert.equal(same.bySku.get('mug').asin, 'b000123456');
 });
 
 /* ---------- match ---------- */
@@ -128,6 +164,36 @@ test('explicit variants set the order: MAIN, PT01–PT08, then SWCH', () => {
   assert.deepEqual(names(m, 'walmart'), ['MUG_3.jpg', 'MUG_2.jpg', 'MUG.jpg', 'MUG_1.jpg']);
 });
 
+test('extra photos matched by SKU prefix don\'t take a row\'s variant', () => {
+  const idx = indexOf(`file,sku,asin,upc,variant\nMUG_main.jpg,MUG,B000123456,${UPC},MAIN\n`);
+  const m = C.match(['MUG_main.jpg', 'MUG_2.jpg', 'MUG_3.jpg'], idx);
+  assert.deepEqual(m.map((e) => [e.how, e.slot, e.record.variant]), [['file', 0, 'MAIN'], ['sku', 1, ''], ['sku', 2, '']]);
+  assert.deepEqual(names(m, 'amazon'), ['B000123456.MAIN.jpg', 'B000123456.PT01.jpg', 'B000123456.PT02.jpg']);
+  assert.deepEqual(names(m, 'walmart'), [`${UPC}.jpg`, `${UPC}_1.jpg`, `${UPC}_2.jpg`]);
+  assert.deepEqual(names(m, 'etsy'), ['MUG.jpg', 'MUG-1.jpg', 'MUG-2.jpg']);
+  // A row with no file name: its variant goes to the photo named exactly after the SKU.
+  const bare = C.match(['MUG_2.jpg', 'MUG.jpg'], indexOf('sku,asin,variant\nMUG,B000123456,MAIN\n'));
+  assert.deepEqual(names(bare, 'amazon'), ['B000123456.PT01.jpg', 'B000123456.MAIN.jpg']);
+});
+
+test('rows that share a placeholder or parent style SKU are separate products', () => {
+  for (const sku of ['N/A', '-']) {
+    const idx = indexOf(`file,sku,asin\na.jpg,${sku},B000000001\nb.jpg,${sku},B000000002\nc.jpg,${sku},B000000003\n`);
+    const rows = C.preview(['a.jpg', 'b.jpg', 'c.jpg'], idx, ['amazon'], '.jpg');
+    assert.deepEqual(rows.map((r) => [r.name, r.problem]),
+      [['B000000001.MAIN.jpg', null], ['B000000002.MAIN.jpg', null], ['B000000003.MAIN.jpg', null]]);
+  }
+  // A "Style" number shared by colours with their own ASINs.
+  const idx = indexOf('file,style,asin\nred.jpg,TEE01,B0RED00001\nblue.jpg,TEE01,B0BLU00001\nred_back.jpg,TEE01,B0RED00001\n');
+  const rows = C.preview(['red.jpg', 'blue.jpg', 'red_back.jpg'], idx, ['amazon', 'etsy'], '.jpg');
+  assert.deepEqual(rows.filter((r) => r.marketplace === 'amazon').map((r) => [r.name, r.problem]),
+    [['B0RED00001.MAIN.jpg', null], ['B0BLU00001.MAIN.jpg', null], ['B0RED00001.PT01.jpg', null]]);
+  // Etsy names by SKU, so the shared style number clashes there and says so.
+  const dup = 'Two photos would get the same name';
+  assert.deepEqual(rows.filter((r) => r.marketplace === 'etsy').map((r) => [r.name, r.problem]),
+    [['TEE01.jpg', dup], ['TEE01.jpg', dup], ['TEE01-1.jpg', null]]);
+});
+
 test('photos without a variant fill the free slots around explicit ones', () => {
   // PT01 and PT02 are taken, so the unlabelled photos become MAIN and PT03.
   const idx = indexOf('file,sku,asin,variant\nside.jpg,MUG,B000123456,PT01\nback.jpg,MUG,B000123456,PT02\n,MUG,,\n');
@@ -165,10 +231,28 @@ test('Amazon allows MAIN plus PT01–PT08 only', () => {
   assert.deepEqual(res[9], { name: null, problem: 'Amazon allows MAIN plus PT01–PT08 only' });
 });
 
-test('Walmart uses the 14-digit GTIN with _N for extra photos', () => {
-  const idx = indexOf(`sku,upc,gtin\nMUG,${UPC},\nCUP,,00${UPC}\nBOWL #2,,\n`);
-  const m = C.match(['MUG.jpg', 'MUG_2.jpg', 'CUP.jpg', 'BOWL #2.jpg', 'BOWL #2 b.jpg'], idx);
-  assert.deepEqual(names(m, 'walmart'), [`00${UPC}.jpg`, `00${UPC}_1.jpg`, `00${UPC}.jpg`, 'BOWL2.jpg', 'BOWL2_1.jpg']);
+test('Walmart uses the GTIN, UPC, EAN or SKU as given, with _N for extra photos', () => {
+  const idx = indexOf(`sku,upc,ean,gtin\nMUG,${UPC},,\nCUP,,,00${UPC}\nBOWL #2,,,\nPLATE,,${EAN},\n`);
+  const m = C.match(['MUG.jpg', 'MUG_2.jpg', 'CUP.jpg', 'BOWL #2.jpg', 'BOWL #2 b.jpg', 'PLATE.jpg'], idx);
+  assert.deepEqual(names(m, 'walmart'), [`${UPC}.jpg`, `${UPC}_1.jpg`, `00${UPC}.jpg`, 'BOWL2.jpg', 'BOWL2_1.jpg', `${EAN}.jpg`]);
+  // No zero padding.
+  const rec = { sku: '', asin: '', upc: UPC, ean: '', gtin: '', variant: '' };
+  assert.deepEqual(C.name({ file: 'x.jpg', slot: 0, record: rec }, 'walmart', '.jpg'), { name: `${UPC}.jpg`, problem: null });
+});
+
+test('an 8-digit barcode can be a UPC-E as well as an EAN-8', () => {
+  const rec = (upc) => ({ file: 'x.jpg', how: 'sku', slot: 0, record: { sku: 'S1', asin: '', upc, ean: '', gtin: '', variant: '', row: {} } });
+  // 04252614 is the UPC-E for UPC-A 042100005264 and fails the EAN-8 check.
+  assert.deepEqual(C.name(rec('04252614'), 'amazon', '.jpg'), { name: '04252614.MAIN.jpg', problem: null });
+  assert.deepEqual(C.name(rec('04252614'), 'walmart', '.jpg'), { name: '04252614.jpg', problem: null });
+  // UPC-E codes ending 0–4 expand differently; EAN-8 96385074 still passes.
+  for (const code of ['01234505', '02345622', '01234531', '01234543', '96385074']) {
+    assert.equal(C.name(rec(code), 'amazon', '.jpg').problem, null, code);
+  }
+  // A wrong check digit, or a UPC-E that doesn't start with 0 or 1, is still caught.
+  for (const code of ['04252615', '94252614', '01234506']) {
+    assert.match(C.name(rec(code), 'amazon', '.jpg').problem, /typos/, code);
+  }
 });
 
 test('other marketplaces use the SKU with -N for extra photos', () => {
@@ -199,7 +283,7 @@ test('barcodes damaged by spreadsheets are caught or repaired', () => {
   assert.deepEqual(C.name(rec({ upc: UPC.slice(1) }), 'amazon', '.jpg'), { name: `${UPC}.MAIN.jpg`, problem: null });
   // Wrong check digit: still named, but flagged.
   const typo = C.name(rec({ upc: '036000291453' }), 'walmart', '.jpg');
-  assert.equal(typo.name, '00036000291453.jpg');
+  assert.equal(typo.name, '036000291453.jpg');
   assert.match(typo.problem, /typos/);
   assert.match(C.name(rec({ asin: 'B00012345' }), 'amazon', '.jpg').problem, /10 letters/);
 });

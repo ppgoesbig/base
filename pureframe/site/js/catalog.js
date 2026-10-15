@@ -17,8 +17,16 @@
   const BAD_ASIN = 'ASINs are 10 letters and digits. Check this one for typos';
   const SKU_SYMBOLS = 'Amazon file names can\'t contain this SKU\'s symbols, so Amazon may not match it. Add the ASIN or UPC';
   const excelNumber = (v) => `This barcode was saved as ${v}, so digits are missing. Format the column as text and export again`;
+  const ID_LABELS = { asin: 'ASIN', upc: 'UPC', ean: 'EAN', gtin: 'GTIN' };
+  const conflict = (key) => `Rows with this SKU have different ${ID_LABELS[key]}s, so this photo can't be matched to one. Add its file name to the right row`;
 
-  const IDS = ['sku', 'asin', 'upc', 'ean', 'gtin'];
+  // Identifier preference for each marketplace's file names.
+  const NAME_KEYS = {
+    amazon: ['asin', 'upc', 'ean', 'gtin', 'sku'],
+    walmart: ['gtin', 'upc', 'ean', 'sku'],
+    other: ['sku', 'asin', 'upc', 'ean', 'gtin'],
+  };
+  const nameKeys = (mkt) => NAME_KEYS[mkt === 'amazon' || mkt === 'walmart' ? mkt : 'other'];
   const IMAGE_EXT = /\.(jpe?g|jpe|jfif|png|gif|webp|tiff?|bmp|heic|heif|avif|psd|svg)$/i;
   const SEPARATORS = ' _-.';
   // What a spreadsheet shows for a long number it stored as a float, e.g. 8.40123E+11
@@ -29,6 +37,31 @@
   const hasOwn = (o, k) => Object.prototype.hasOwnProperty.call(o, k);
   const str = (v) => (v == null ? '' : String(v));
   const fold = (s) => str(s).normalize('NFC').trim().toLowerCase();
+
+  // A cell that holds an identifier: not blank, "N/A" or similar.
+  function isReal(v) {
+    const s = str(v).trim();
+    return s !== '' && !PLACEHOLDER.test(s) && /[A-Za-z0-9]/.test(s);
+  }
+
+  // Comparable form of an identifier: "b0x-12" equals "B0X12", and a barcode
+  // equals itself with leading zeros (UPC-A 036… is GTIN-14 00036…).
+  function idKey(v) {
+    const s = str(v).toUpperCase().replace(/[^A-Z0-9]/g, '');
+    return /^\d+$/.test(s) ? s.replace(/^0+/, '') : s;
+  }
+
+  // First identifier in `keys` the record fills in. One its rows disagree on
+  // (see product()) stops the search: falling back to another identifier
+  // would hide the disagreement.
+  function pick(rec, keys) {
+    const conflicts = Array.isArray(rec.conflicts) ? rec.conflicts : [];
+    for (const k of keys) {
+      if (conflicts.includes(k)) return { key: k, value: '', conflict: true };
+      if (isReal(rec[k])) return { key: k, value: str(rec[k]).trim(), conflict: false };
+    }
+    return null;
+  }
 
   /* ---------- CSV ---------- */
 
@@ -140,8 +173,28 @@
     return fold(s.replace(IMAGE_EXT, ''));
   }
 
+  /* What the rows of one SKU say about the product: each identifier from
+   * whichever rows fill it in, and no variant, since a variant describes one
+   * photo. Rows that disagree (two ASINs under one parent style number, say)
+   * leave that identifier blank and list it in `conflicts`, so a photo
+   * matched only by SKU never takes another product's identifier. */
+  function product(recs) {
+    const p = Object.assign({}, recs[0], { variant: '' }), conflicts = [];
+    for (const k of Object.keys(ID_LABELS)) {
+      const real = recs.map((r) => r[k]).filter(isReal);
+      if (!real.length) continue;
+      if (new Set(real.map(idKey)).size > 1) { p[k] = ''; conflicts.push(k); } else p[k] = real[0];
+    }
+    if (conflicts.length) p.conflicts = conflicts;
+    return p;
+  }
+
+  /* byFile holds each row under its file name. bySku holds each real SKU
+   * (not "N/A" or similar): the row itself when the SKU is on one row that
+   * names no file, so that row's variant can apply to the photo named after
+   * the SKU; otherwise product() of its rows. */
   function buildIndex(rows, cols) {
-    const byFile = new Map(), bySku = new Map(), merged = new Set();
+    const byFile = new Map(), bySku = new Map(), skuRows = new Map();
     const list = Array.isArray(rows) ? rows : [];
     const c = cols || columns(list.length && list[0] ? Object.keys(list[0]) : []);
     for (const row of list) {
@@ -150,17 +203,14 @@
       const rec = { sku: get('sku'), asin: get('asin'), upc: get('upc'), ean: get('ean'), gtin: get('gtin'), variant: get('variant'), row };
       const fk = fileStem(get('file'));
       if (fk && !byFile.has(fk)) byFile.set(fk, rec);
+      if (!isReal(rec.sku)) continue;
       const sk = fold(rec.sku);
-      if (!sk) continue;
-      const prev = bySku.get(sk);
-      if (!prev) { bySku.set(sk, rec); continue; }
-      // A repeated SKU means one row per photo. The SKU lookup gets a
-      // product-level copy: identifiers filled from any row, and no variant,
-      // since a per-photo variant doesn't describe the product.
-      let m = prev;
-      if (!merged.has(prev)) { m = Object.assign({}, prev, { variant: '' }); merged.add(m); bySku.set(sk, m); }
-      for (const k of IDS) if (!m[k] && rec[k]) m[k] = rec[k];
+      if (!skuRows.has(sk)) skuRows.set(sk, { recs: [], named: false });
+      const s = skuRows.get(sk);
+      s.recs.push(rec);
+      if (fk) s.named = true;
     }
+    for (const [sk, s] of skuRows) bySku.set(sk, s.recs.length === 1 && !s.named ? s.recs[0] : product(s.recs));
     return { byFile, bySku };
   }
 
@@ -170,9 +220,9 @@
   // "abc-1_2" picks SKU "abc-1" over "abc" and "abcd" doesn't match "abc".
   function skuPrefix(stem, bySku) {
     if (!stem || !bySku.size) return null;
-    if (bySku.has(stem)) return bySku.get(stem);
+    if (bySku.has(stem)) return { rec: bySku.get(stem), exact: true };
     for (let i = stem.length - 1; i > 0; i--) {
-      if (SEPARATORS.includes(stem[i]) && bySku.has(stem.slice(0, i))) return bySku.get(stem.slice(0, i));
+      if (SEPARATORS.includes(stem[i]) && bySku.has(stem.slice(0, i))) return { rec: bySku.get(stem.slice(0, i)), exact: false };
     }
     return null;
   }
@@ -204,11 +254,24 @@
   }
   const variantRank = (code) => (code === 'MAIN' ? 0 : code === 'SWCH' ? Infinity : code ? Number(code.slice(2)) : null);
 
-  const productKey = (rec, ids) => {
-    for (const k of IDS) if (rec[k]) return k + ':' + fold(rec[k]);
+  /* Which product a photo belongs to, for numbering. Rows that share a real
+   * SKU are one product unless they disagree on an ASIN or barcode (a parent
+   * style number shared by colours, say). Otherwise a photo's product is the
+   * identifiers its names would use on Amazon, Walmart and the rest, so
+   * photos are only numbered together when every marketplace would name
+   * them after the same identifier. */
+  function productKey(rec, bySku, ids) {
+    const sk = isReal(rec.sku) ? fold(rec.sku) : '';
+    const p = sk && bySku.get(sk);
+    if (sk && !(p && p.conflicts)) return 'sku:' + sk;
+    const parts = Object.values(NAME_KEYS).map((keys) => {
+      const id = pick(rec, keys);
+      return id ? id.key + ':' + (id.conflict ? '?' : idKey(id.value)) : '';
+    });
+    if (parts.some(Boolean)) return 'ids:' + parts.join('|');
     if (!ids.has(rec)) ids.set(rec, 'row:' + ids.size);
     return ids.get(rec);
-  };
+  }
 
   const isMainHint = (stem) => /(?:^|[ _.-])main$/.test(stem);
 
@@ -236,19 +299,28 @@
     const list = Array.isArray(fileNames) ? fileNames : [];
     const byFile = index && index.byFile instanceof Map ? index.byFile : new Map();
     const bySku = index && index.bySku instanceof Map ? index.bySku : new Map();
+    const extras = new Map();
     const items = list.map((f, i) => {
       const file = typeof f === 'string' ? f : f && typeof f.name === 'string' ? f.name : str(f);
       const stem = fileStem(file);
-      let record = null, how = null;
+      let record = null, how = null, hit;
       if (stem && byFile.has(stem)) { record = byFile.get(stem); how = 'file'; }
-      else if ((record = skuPrefix(stem, bySku))) how = 'sku';
+      else if ((hit = skuPrefix(stem, bySku))) {
+        record = hit.rec; how = 'sku';
+        // A name longer than the SKU is an extra photo of the product, so a
+        // row's variant (which describes one photo) isn't its own.
+        if (!hit.exact && record.variant) {
+          if (!extras.has(record)) extras.set(record, Object.assign({}, record, { variant: '' }));
+          record = extras.get(record);
+        }
+      }
       return { i, file, stem, record, how, slot: null, rank: record ? variantRank(amazonVariant(record.variant)) : null };
     });
 
     const groups = new Map(), ids = new Map();
     for (const it of items) {
       if (!it.record) continue;
-      const key = productKey(it.record, ids);
+      const key = productKey(it.record, bySku, ids);
       if (groups.has(key)) groups.get(key).push(it);
       else groups.set(key, [it]);
     }
@@ -265,25 +337,29 @@
     return (10 - (sum % 10)) % 10 === code.charCodeAt(code.length - 1) - 48;
   }
 
+  // An 8-digit UPC-E (number system 0 or 1) written out as the UPC-A it
+  // stands for, whose check digit it carries; '' when it can't be one.
+  function upcA(e) {
+    const [n, a, b, c, d, x, f, check] = e;
+    if (n !== '0' && n !== '1') return '';
+    const body = f <= '2' ? a + b + f + '0000' + c + d + x
+      : f === '3' ? a + b + c + '00000' + d + x
+        : f === '4' ? a + b + c + d + '00000' + x
+          : a + b + c + d + x + '0000' + f;
+    return n + body + check;
+  }
+
   // Cleans a UPC/EAN/GTIN cell. An 11-digit UPC lost its leading zero to a
   // spreadsheet and gets it back; a value in scientific notation lost digits
-  // for good, so it can't be used.
+  // for good, so it can't be used. Eight digits can be an EAN-8 or a UPC-E.
   function barcode(v) {
     if (SCIENTIFIC.test(v)) return { code: '', error: excelNumber(v) };
     const digits = v.replace(/[\s-]/g, '');
     if (!/^\d+$/.test(digits)) return { code: v.replace(/[^A-Za-z0-9]/g, ''), problem: BAD_BARCODE };
     const code = digits.length === 11 ? '0' + digits : digits;
-    const ok = [8, 12, 13, 14].includes(code.length) && checkDigitOk(code);
+    const ok = code.length === 8 ? checkDigitOk(code) || (upcA(code) !== '' && checkDigitOk(upcA(code)))
+      : [12, 13, 14].includes(code.length) && checkDigitOk(code);
     return { code, problem: ok ? null : BAD_BARCODE };
-  }
-
-  // First identifier in `keys` with a real value (not blank, "N/A" or similar).
-  function pick(rec, keys) {
-    for (const k of keys) {
-      const v = str(rec[k]).trim();
-      if (v && !PLACEHOLDER.test(v) && /[A-Za-z0-9]/.test(v)) return { key: k, value: v };
-    }
-    return null;
   }
 
   // Output extension: the one given (with or without the dot), or the photo's own.
@@ -305,11 +381,9 @@
     const slot = Number.isInteger(entry.slot) && entry.slot > 0 ? entry.slot : 0;
     const x = extension(ext, entry.file);
     const mkt = str(marketplace).toLowerCase();
-    const keys = mkt === 'amazon' ? ['asin', 'upc', 'ean', 'gtin', 'sku']
-      : mkt === 'walmart' ? ['gtin', 'upc', 'ean', 'sku']
-        : ['sku', 'asin', 'upc', 'ean', 'gtin'];
-    const id = pick(rec, keys);
+    const id = pick(rec, nameKeys(mkt));
     if (!id) return { name: null, problem: NO_ID };
+    if (id.conflict) return { name: null, problem: conflict(id.key) };
 
     let value, problem = null;
     if (id.key === 'asin') {
@@ -335,9 +409,9 @@
       return { name: `${value}.${variant}${x}`, problem };
     }
     if (mkt === 'walmart') {
+      // Barcodes keep the length the sheet gives them; padding a UPC-E to
+      // 14 digits would make a GTIN that doesn't exist.
       if (id.key === 'sku') value = id.value.replace(/[^A-Za-z0-9_-]/g, '');
-      // Walmart asks for the 14-digit GTIN; shorter barcodes pad with zeros.
-      else if (/^\d{8,13}$/.test(value)) value = value.padStart(14, '0');
       return { name: (slot ? `${value}_${slot}` : value) + x, problem };
     }
     // A leading dot would make a hidden file.
