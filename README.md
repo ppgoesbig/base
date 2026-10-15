@@ -1,5 +1,7 @@
 # NetSpeedBar
 
+> This repo also contains **[PureFrame](pureframe/)**, a marketplace product photo checker and fixer with a paid Pro edition. See [pureframe/LAUNCH.md](pureframe/LAUNCH.md).
+
 A small macOS menu bar app that shows your live **ping**, plus **download / upload speed** from the last speed test.
 
 ```

@@ -1,0 +1,244 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>PureFrame: Amazon &amp; marketplace product photo checker and fixer</title>
+  <meta name="description" content="Free product photo checker for Amazon, Walmart, TikTok Shop, eBay, Etsy, Shopify and Google Shopping. Get a pure white #FFFFFF background, 85% frame fill and the right size in one click. Runs in your browser; photos are never uploaded.">
+  <!-- free:start -->
+  <link rel="canonical" href="%%SITE_URL%%/">
+  <meta property="og:type" content="website">
+  <meta property="og:title" content="PureFrame: product photos that pass the marketplace check">
+  <meta property="og:description" content="Check and fix product photos for Amazon, Walmart, TikTok Shop, eBay, Etsy, Shopify and Google Shopping. Free, private, in your browser.">
+  <meta property="og:url" content="%%SITE_URL%%/">
+  <meta property="og:image" content="%%SITE_URL%%/og.png">
+  <meta name="twitter:card" content="summary_large_image">
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "SoftwareApplication",
+    "name": "PureFrame",
+    "applicationCategory": "MultimediaApplication",
+    "operatingSystem": "Any (web browser)",
+    "description": "Checks and fixes product photos for marketplace image requirements: pure white background, frame fill, size, format and colour.",
+    "offers": [
+      { "@type": "Offer", "name": "Free", "price": "0", "priceCurrency": "USD" },
+      { "@type": "Offer", "name": "Pro", "price": "29", "priceCurrency": "USD" }
+    ]
+  }
+  </script>
+  <!-- free:end -->
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect x='3' y='3' width='26' height='26' rx='6' fill='%23111827'/%3E%3Crect x='9' y='9' width='14' height='14' rx='2' fill='%23fff'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="css/styles.css">
+</head>
+<body class="edition-free">
+  <header class="site-header">
+    <div class="wrap header-row">
+      <a class="brand" href="./" aria-label="PureFrame home">
+        <svg viewBox="0 0 32 32" width="28" height="28" aria-hidden="true"><rect x="3" y="3" width="26" height="26" rx="6" fill="currentColor"/><rect x="9" y="9" width="14" height="14" rx="2" fill="var(--bg)"/></svg>
+        <span>PureFrame</span><span class="pro-only badge-pro">Pro</span>
+      </a>
+      <!-- free:start -->
+      <nav class="nav" aria-label="Main">
+        <a href="#tool">Check photos</a>
+        <a href="guides/">Requirements</a>
+        <a href="#pricing">Pricing</a>
+        <a href="#faq">FAQ</a>
+        <a class="btn btn-small btn-primary" href="#pricing" data-pro-link>Get Pro</a>
+      </nav>
+      <!-- free:end -->
+    </div>
+  </header>
+
+  <main>
+    <!-- free:start -->
+    <section class="hero wrap">
+      <h1>Product photos that pass the marketplace check</h1>
+      <p class="lede">Check every photo against Amazon, Walmart, TikTok Shop, eBay, Etsy, Shopify and Google Shopping rules. Then fix it in one click: pure <code>#FFFFFF</code> background, product filling the frame, the right size and format.</p>
+      <ul class="trust" aria-label="Highlights">
+        <li><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 2l6 2.5v5c0 4-2.6 6.9-6 8.5-3.4-1.6-6-4.5-6-8.5v-5L10 2z" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>Private: photos never leave your computer</li>
+        <li><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4 10.5l4 4 8-9" fill="none" stroke="currentColor" stroke-width="1.8"/></svg>Free checks, no sign-up</li>
+        <li><svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="7" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M10 6v4l3 2" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>Seconds per photo</li>
+      </ul>
+    </section>
+    <!-- free:end -->
+
+    <section id="tool" class="tool wrap" aria-label="Photo checker">
+      <div class="toolbar">
+        <label class="field">
+          <span class="field-label">Marketplace</span>
+          <select id="preset"></select>
+        </label>
+        <details class="settings" id="settings">
+          <summary><svg viewBox="0 0 20 20" width="16" height="16" aria-hidden="true"><path d="M3 6h9M15 6h2M3 14h2M8 14h9" stroke="currentColor" stroke-width="1.7" fill="none"/><circle cx="13.5" cy="6" r="1.8" fill="none" stroke="currentColor" stroke-width="1.6"/><circle cx="6.5" cy="14" r="1.8" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>Fix settings</summary>
+          <div class="settings-grid">
+            <label class="field">
+              <span class="field-label">Background cleanup <output id="tolOut"></output></span>
+              <input type="range" id="tolerance" min="4" max="40" step="1">
+              <span class="hint">Raise it if grey patches remain; lower it if a white product loses its edges.</span>
+            </label>
+            <label class="check"><input type="checkbox" id="levels"> Correct white balance &amp; exposure</label>
+            <label class="check"><input type="checkbox" id="reframe"> Recentre and scale product to fill the frame</label>
+            <fieldset class="pro-fields" id="proFields">
+              <legend>Output <span class="tag-pro free-only">Pro</span></legend>
+              <div class="row">
+                <label class="field"><span class="field-label">Width</span><input type="number" id="outW" min="100" max="10000" step="1"></label>
+                <label class="field"><span class="field-label">Height</span><input type="number" id="outH" min="100" max="10000" step="1"></label>
+              </div>
+              <label class="field">
+                <span class="field-label">Product fill <output id="fillOut"></output></span>
+                <input type="range" id="fill" min="60" max="98" step="1">
+              </label>
+              <div class="row">
+                <label class="field"><span class="field-label">Format</span>
+                  <select id="outType"><option value="image/jpeg">JPEG</option><option value="image/png">PNG</option></select>
+                </label>
+                <label class="field"><span class="field-label">JPEG quality</span><input type="number" id="quality" min="60" max="100" step="1"></label>
+              </div>
+              <label class="field">
+                <span class="field-label">File names</span>
+                <input type="text" id="naming" spellcheck="false" autocomplete="off">
+                <span class="hint">Tokens: <code>{name}</code> original name, <code>{n}</code>/<code>{nn}</code> number, <code>{size}</code>. Amazon: <code>{name}.MAIN</code> or <code>{name}.PT{nn}</code>.</span>
+              </label>
+            </fieldset>
+          </div>
+        </details>
+      </div>
+
+      <div class="dropzone" id="dropzone" tabindex="0" role="button" aria-describedby="dropHint">
+        <input type="file" id="fileInput" accept="image/*,.tif,.tiff,.heic" multiple hidden>
+        <svg viewBox="0 0 48 48" width="44" height="44" aria-hidden="true"><rect x="6" y="10" width="36" height="28" rx="4" fill="none" stroke="currentColor" stroke-width="2.5"/><circle cx="17" cy="20" r="3.5" fill="currentColor"/><path d="M8 34l10-9 7 6 6-5 9 8" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linejoin="round"/></svg>
+        <p class="drop-title"><strong>Drop product photos here</strong> or <span class="link">browse</span></p>
+        <p class="hint" id="dropHint">JPEG, PNG, WebP, GIF or BMP. Add as many as you like; nothing is uploaded.</p>
+      </div>
+
+      <div class="summary" id="summary" hidden>
+        <p class="summary-text" id="summaryText" aria-live="polite"></p>
+        <div class="summary-actions">
+          <button class="btn" id="clearAll" type="button">Clear</button>
+          <button class="btn" id="fixAll" type="button">Fix all</button>
+          <button class="btn btn-primary" id="zipAll" type="button">Download all (.zip) <span class="tag-pro free-only">Pro</span></button>
+        </div>
+      </div>
+      <p class="free-only quota" id="quota" hidden></p>
+
+      <ul class="results" id="results"></ul>
+
+      <div class="rules-box" id="rulesBox">
+        <h2 id="rulesTitle">Amazon main image rules</h2>
+        <ul id="rulesList"></ul>
+        <p class="hint">PureFrame checks what can be measured: background, frame fill, size, shape, format, file size and colour. Content rules such as "no text or logos" still need your eye. <a id="rulesGuide" class="free-only" href="guides/">Full guide</a></p>
+      </div>
+    </section>
+
+    <!-- free:start -->
+    <section class="how wrap" aria-labelledby="howTitle">
+      <h2 id="howTitle">How it works</h2>
+      <ol class="steps">
+        <li><h3>Drop your photos</h3><p>Studio shots on white, grey or any light backdrop. Batches are fine.</p></li>
+        <li><h3>See what fails, and why</h3><p>Each photo is graded against the marketplace you sell on: background, fill, size, shape, format, file size, colour mode.</p></li>
+        <li><h3>Fix in one click</h3><p>PureFrame lifts the backdrop to pure #FFFFFF, recentres and scales the product to fill the frame, then exports at the right size and checks the result again.</p></li>
+      </ol>
+    </section>
+
+    <section id="pricing" class="pricing wrap" aria-labelledby="pricingTitle">
+      <h2 id="pricingTitle">Pricing</h2>
+      <p class="section-lede">Checking is free forever. Pro is a one-time purchase for sellers who list in bulk.</p>
+      <div class="plans">
+        <div class="plan">
+          <h3>Free</h3>
+          <p class="price">$0</p>
+          <ul>
+            <li>Unlimited checks for 7 marketplaces</li>
+            <li>Auto-fix <span data-free-limit>3</span> photos per visit</li>
+            <li>Download fixed photos one by one</li>
+            <li>Runs in your browser, private</li>
+          </ul>
+          <a class="btn" href="#tool">Check photos</a>
+        </div>
+        <div class="plan plan-pro">
+          <h3>Pro <span class="plan-note">one-time</span></h3>
+          <p class="price"><span data-price>$29</span> <span class="price-sub">lifetime</span></p>
+          <ul>
+            <li>Everything in Free</li>
+            <li><strong>Unlimited</strong> auto-fix, whole folders at once</li>
+            <li>One-click ZIP of the batch</li>
+            <li>Bulk rename for upload, e.g. <code>B0C1234567.MAIN.jpg</code></li>
+            <li>Custom output size, fill, format and quality</li>
+            <li>Works offline: a single app file for Mac, Windows and Linux</li>
+            <li>Free updates when marketplace rules change</li>
+          </ul>
+          <a class="btn btn-primary" href="#" data-pro-link>Get PureFrame Pro</a>
+          <p class="hint">30-day money-back guarantee. No subscription.</p>
+        </div>
+      </div>
+      <p class="compare">Photo editing services charge about $1–2 per image. Pro pays for itself on your first 20 photos.</p>
+    </section>
+
+    <section id="faq" class="faq wrap" aria-labelledby="faqTitle">
+      <h2 id="faqTitle">Questions</h2>
+      <details><summary>Are my photos uploaded anywhere?</summary><p>No. PureFrame runs entirely in your browser. Photos are read, checked and fixed on your own computer, and nothing is sent to a server. You can disconnect from the internet after the page loads and it keeps working.</p></details>
+      <details><summary>What does Amazon require for the main image?</summary><p>A pure white background (RGB 255, 255, 255), the product filling at least 85% of the frame, at least 1,000 px on the longest side for zoom, and nothing but the product: no text, logos, watermarks, borders or extra props. See the <a href="guides/amazon-image-requirements.html">full Amazon guide</a>.</p></details>
+      <details><summary>My background looks white. Why does it fail?</summary><p>Most "white" studio backdrops photograph as light grey, around 235–250. They look white on screen, but automated checks look for exact #FFFFFF. PureFrame shows the share of background pixels that are exactly white and fixes it with a white-point correction plus a clean flood fill of the backdrop.</p></details>
+      <details><summary>Will it cut a product out of a busy or lifestyle photo?</summary><p>No. PureFrame is built for studio shots on a plain backdrop, which is what main images use. If the background is busy it tells you so and leaves it alone. Run a background remover first, then use PureFrame to get exact white, fill and size.</p></details>
+      <details><summary>Does it work with white products?</summary><p>Yes. Only backdrop pixels connected to the edge of the photo are whitened, so white areas inside the product keep their shading. If a white product's edge blends into the backdrop, lower the "Background cleanup" setting.</p></details>
+      <details><summary>Does passing mean my listing will be approved?</summary><p>PureFrame checks the measurable rules. Marketplaces also have content rules (no text, logos or props that aren't included) and category style guides that need a human eye, and they update their rules from time to time. Each requirement page links to the official source.</p></details>
+      <details><summary>How do I get Pro after buying?</summary><p>You'll get a download link for PureFrame Pro: a single file that opens in Chrome, Edge, Safari or Firefox on Mac, Windows or Linux. It works offline with no limits. Updates are free.</p></details>
+    </section>
+    <!-- free:end -->
+  </main>
+
+  <footer class="site-footer">
+    <div class="wrap footer-row">
+      <p>© <span id="year">2026</span> PureFrame. Photos are processed on your device and never uploaded.</p>
+      <!-- free:start -->
+      <nav aria-label="Requirements guides" class="footer-links">
+        <a href="guides/amazon-image-requirements.html">Amazon</a>
+        <a href="guides/walmart-image-requirements.html">Walmart</a>
+        <a href="guides/tiktok-image-requirements.html">TikTok Shop</a>
+        <a href="guides/ebay-image-requirements.html">eBay</a>
+        <a href="guides/etsy-image-requirements.html">Etsy</a>
+        <a href="guides/shopify-image-requirements.html">Shopify</a>
+        <a href="guides/google-image-requirements.html">Google Shopping</a>
+      </nav>
+      <!-- free:end -->
+    </div>
+  </footer>
+
+  <!-- free:start -->
+  <dialog class="modal" id="upsell" aria-labelledby="upsellTitle">
+    <form method="dialog">
+      <h2 id="upsellTitle">Unlock PureFrame Pro</h2>
+      <p id="upsellReason"></p>
+      <ul>
+        <li>Unlimited one-click fixes for whole folders</li>
+        <li>ZIP download, named and ready for bulk upload</li>
+        <li>Custom size, fill, format and quality</li>
+        <li>Works offline, no limits</li>
+      </ul>
+      <div class="modal-actions">
+        <button class="btn" value="cancel">Not now</button>
+        <a class="btn btn-primary" href="#" data-pro-link>Get Pro for <span data-price>$29</span></a>
+      </div>
+      <p class="hint">One-time purchase · 30-day money-back guarantee</p>
+    </form>
+  </dialog>
+  <!-- free:end -->
+
+  <dialog class="modal viewer" id="viewer" aria-label="Photo preview">
+    <form method="dialog">
+      <div class="viewer-img"><img id="viewerImg" alt=""></div>
+      <div class="modal-actions">
+        <button class="btn" type="button" id="viewerToggle">Show before</button>
+        <button class="btn btn-primary" value="close">Close</button>
+      </div>
+    </form>
+  </dialog>
+
+  <script src="js/config.js"></script>
+  <script src="js/engine.js"></script>
+  <script src="js/rules.js"></script>
+  <script src="js/zip.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>
